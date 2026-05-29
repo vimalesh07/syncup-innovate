@@ -2,10 +2,3 @@
   command = "npm run build"
   publish = "dist/client"
   functions = "dist/server"
-
-[build.environment]
-  VITE_GOOGLE_CLIENT_ID = "your-value-here"
-  VITE_SUPABASE_URL = "your-value-here"
-  VITE_SUPABASE_PUBLISHABLE_KEY = "your-value-here"
-  SUPABASE_URL = "your-value-here"
-  SUPABASE_PUBLISHABLE_KEY = "your-value-here"
