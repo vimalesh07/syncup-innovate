@@ -48,6 +48,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const [cookieNoticeOpen, setCookieNoticeOpen] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("syncup_cookie_notice") !== "accepted";
@@ -59,7 +60,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const completion = profileCompletion(profile);
-  const unreadCount = notifications.filter((item) => !item.read).length;
+  const notificationUnreadCount = notifications.filter((item) => !item.read).length;
   const locationKey = `${location.pathname}${location.searchStr}${location.hash}`;
 
   const loadNotifications = async () => {
@@ -73,8 +74,76 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
     setNotifications((data as Notification[]) ?? []);
   };
 
+  const loadMessageUnreadCount = async () => {
+    if (!user) return;
+    const localReads = readLocalMessageReads(user.id);
+    let directRows = await (supabase as any)
+      .from("direct_messages")
+      .select("id, sender_id, recipient_id, read, read_by")
+      .eq("recipient_id", user.id);
+    if (directRows.error && isMissingMessageMetadata(directRows.error)) {
+      directRows = await (supabase as any)
+        .from("direct_messages")
+        .select("id, sender_id, recipient_id, read")
+        .eq("recipient_id", user.id);
+    }
+
+    let count = ((directRows.data as Array<{ id: string; sender_id: string; read?: boolean | null; read_by?: string[] | null }>) ?? [])
+      .filter((message) => message.sender_id !== user.id && !localReads.has(message.id) && !(message.read_by ?? []).includes(user.id) && !message.read)
+      .length;
+
+    const leaderTeams = await supabase.from("teams").select("id").eq("leader_id", user.id);
+    const leaderTeamIds = ((leaderTeams.data as Array<{ id: string }>) ?? []).map((team) => team.id);
+    const ownRequests = await supabase.from("join_requests").select("id").eq("user_id", user.id);
+    const leaderRequests = leaderTeamIds.length ? await supabase.from("join_requests").select("id").in("team_id", leaderTeamIds) : { data: [] };
+    const requestIds = [
+      ...new Set([
+        ...(((ownRequests.data as Array<{ id: string }>) ?? []).map((request) => request.id)),
+        ...(((leaderRequests.data as Array<{ id: string }>) ?? []).map((request) => request.id)),
+      ]),
+    ];
+
+    if (requestIds.length) {
+      let requestMessages = await (supabase as any)
+        .from("join_request_messages")
+        .select("id, sender_id, read_by")
+        .in("request_id", requestIds);
+      if (requestMessages.error && isMissingMessageMetadata(requestMessages.error)) {
+        requestMessages = await (supabase as any)
+          .from("join_request_messages")
+          .select("id, sender_id")
+          .in("request_id", requestIds);
+      }
+      count += ((requestMessages.data as Array<{ id: string; sender_id: string; read_by?: string[] | null }>) ?? [])
+        .filter((message) => message.sender_id !== user.id && !localReads.has(message.id) && !(message.read_by ?? []).includes(user.id))
+        .length;
+    }
+
+    setMessageUnreadCount(count);
+  };
+
   useEffect(() => {
     loadNotifications();
+    loadMessageUnreadCount();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    window.addEventListener("syncup_message_reads_updated", loadMessageUnreadCount);
+    return () => window.removeEventListener("syncup_message_reads_updated", loadMessageUnreadCount);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel(`shell-unread-${user.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "direct_messages" }, () => loadMessageUnreadCount())
+      .on("postgres_changes", { event: "*", schema: "public", table: "join_request_messages" }, () => loadMessageUnreadCount())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user?.id]);
 
   useEffect(() => {
@@ -118,7 +187,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
     setNotificationOpen((current) => !current);
     if (!notificationOpen) {
       await loadNotifications();
-      if (unreadCount > 0 && user) {
+      if (notificationUnreadCount > 0 && user) {
         await supabase.from("notifications").update({ read: true }).eq("user_id", user.id).eq("read", false);
         setNotifications((current) => current.map((item) => ({ ...item, read: true })));
       }
@@ -157,6 +226,11 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
                 >
                   <Icon className="h-4 w-4" />
                   {link.label}
+                  {link.to === "/messages" && messageUnreadCount > 0 && (
+                    <span className="grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19]">
+                      {messageUnreadCount}
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -175,9 +249,9 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
               className="relative hidden rounded-xl border border-white/10 bg-white/5 p-2 text-white/80 transition hover:bg-white/10 md:block"
             >
               <Bell className="h-5 w-5" />
-              {unreadCount > 0 && (
+              {notificationUnreadCount > 0 && (
                 <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19] shadow-[0_0_12px_rgba(34,211,238,0.9)]">
-                  {unreadCount}
+                  {notificationUnreadCount}
                 </span>
               )}
             </button>
@@ -264,6 +338,11 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
               >
                 <Icon className="h-4 w-4 text-cyan-300" />
                 {link.label}
+                {link.to === "/messages" && messageUnreadCount > 0 && (
+                  <span className="ml-auto grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19]">
+                    {messageUnreadCount}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -315,4 +394,18 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
       <section className="relative z-10 mx-auto max-w-7xl px-4 pb-16 pt-24 sm:px-6">{children}</section>
     </main>
   );
+}
+
+function readLocalMessageReads(userId: string) {
+  if (typeof window === "undefined") return new Set<string>();
+  try {
+    return new Set<string>(JSON.parse(window.localStorage.getItem(`syncup_local_reads_${userId}`) ?? "[]"));
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function isMissingMessageMetadata(error: { message?: string }) {
+  const message = error.message ?? "";
+  return message.includes("schema cache") || message.includes("Could not find");
 }

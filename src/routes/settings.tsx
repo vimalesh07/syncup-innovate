@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, Eye, Loader2, Mail, Save, Users } from "lucide-react";
+import { Bell, BellOff, Eye, Loader2, Mail, Save, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
@@ -29,6 +29,10 @@ function SettingsPage() {
     team_invites: true,
     public_profile: true,
   });
+  const [muteAllMessages, setMuteAllMessages] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("syncup_mute_all_notifications") === "true";
+  });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -54,6 +58,7 @@ function SettingsPage() {
       toast.error(error.message);
       return;
     }
+    window.localStorage.setItem("syncup_mute_all_notifications", String(muteAllMessages));
     toast.success("Settings saved.");
   };
 
@@ -64,6 +69,7 @@ function SettingsPage() {
       <div className="mt-6 space-y-3">
         <Toggle icon={Mail} label="Email notifications" checked={settings.email_notifications} onChange={(value) => setSettings({ ...settings, email_notifications: value })} />
         <Toggle icon={Users} label="Team invite alerts" checked={settings.team_invites} onChange={(value) => setSettings({ ...settings, team_invites: value })} />
+        <Toggle icon={BellOff} label="Mute all message sounds" checked={muteAllMessages} onChange={setMuteAllMessages} />
         <Toggle icon={Eye} label="Public profile" checked={settings.public_profile} onChange={(value) => setSettings({ ...settings, public_profile: value })} />
         <div className="rounded-xl border border-white/10 bg-white/5 p-4">
           <div className="flex items-center gap-3">

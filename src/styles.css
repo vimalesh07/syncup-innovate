@@ -294,6 +294,45 @@ html[data-theme="light"] .syncup-app .text-gradient {
   color: transparent !important;
 }
 
+.message-action-button,
+.message-action-menu,
+.message-reaction,
+.message-composer,
+.message-profile-drawer {
+  background-color: rgba(11, 15, 25, 0.92);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.message-action-button:hover,
+.message-action-menu button:hover,
+.message-reaction:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.syncup-app.theme-light .message-action-button,
+.syncup-app.theme-light .message-action-menu,
+.syncup-app.theme-light .message-reaction,
+.syncup-app.theme-light .message-composer,
+.syncup-app.theme-light .message-profile-drawer,
+html[data-theme="light"] .syncup-app .message-action-button,
+html[data-theme="light"] .syncup-app .message-action-menu,
+html[data-theme="light"] .syncup-app .message-reaction,
+html[data-theme="light"] .syncup-app .message-composer,
+html[data-theme="light"] .syncup-app .message-profile-drawer {
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+.syncup-app.theme-light .message-action-button:hover,
+.syncup-app.theme-light .message-action-menu button:hover,
+.syncup-app.theme-light .message-reaction:hover,
+html[data-theme="light"] .syncup-app .message-action-button:hover,
+html[data-theme="light"] .syncup-app .message-action-menu button:hover,
+html[data-theme="light"] .syncup-app .message-reaction:hover {
+  background-color: rgba(15, 23, 42, 0.08) !important;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #0B0F19; }

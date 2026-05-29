@@ -1,6 +1,6 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Camera, Github, Globe, Linkedin, Loader2, Save, ShieldCheck, Trophy, UserCheck, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, Camera, Github, Globe, Linkedin, Loader2, Save, ShieldCheck, Trash2, Trophy, UserCheck, UserPlus, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
@@ -38,6 +38,7 @@ function ProfileRoute() {
 
 function ProfilePage() {
   const { profile, user } = useAuth();
+  const navigate = useNavigate();
   const [form, setForm] = useState<Partial<Profile>>({});
   const [socialStats, setSocialStats] = useState({ teams: 0, followers: 0, following: 0 });
   const [teams, setTeams] = useState<TeamSummary[]>([]);
@@ -45,33 +46,46 @@ function ProfilePage() {
   const [followingProfiles, setFollowingProfiles] = useState<Profile[]>([]);
   const [listMode, setListMode] = useState<SocialListMode | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [formReady, setFormReady] = useState(false);
 
-  const DRAFT_KEY = `profile_draft_${user?.id}`;
+  const DRAFT_KEY = user ? `profile_draft_${user.id}` : "";
 
-  // Load draft from localStorage or sync with profile
   useEffect(() => {
-    if (profile) {
-      const draft = localStorage.getItem(DRAFT_KEY);
-      if (draft) {
-        try {
-          const draftData = JSON.parse(draft);
-          setForm(draftData);
-        } catch {
-          setForm(profile);
-        }
+    if (!user || !profile || !DRAFT_KEY) return;
+
+    const draft = localStorage.getItem(DRAFT_KEY);
+    if (!draft) {
+      setForm(profile);
+      setFormReady(true);
+      return;
+    }
+
+    try {
+      const draftData = JSON.parse(draft) as Partial<Profile>;
+      const draftProfile = { ...profile, ...draftData, id: user.id } as Profile;
+
+      if (profileCompletion(draftProfile) > profileCompletion(profile)) {
+        setForm(draftProfile);
       } else {
+        localStorage.removeItem(DRAFT_KEY);
         setForm(profile);
       }
+    } catch {
+      localStorage.removeItem(DRAFT_KEY);
+      setForm(profile);
     }
-  }, [profile, DRAFT_KEY]);
+    setFormReady(true);
+  }, [profile, user?.id, DRAFT_KEY]);
 
-  // Auto-save form to localStorage on change
   useEffect(() => {
+    if (!user || !formReady || !DRAFT_KEY || form.id !== user.id) return;
     const timer = setTimeout(() => {
       localStorage.setItem(DRAFT_KEY, JSON.stringify(form));
     }, 500);
     return () => clearTimeout(timer);
-  }, [form, DRAFT_KEY]);
+  }, [form, formReady, user?.id, DRAFT_KEY]);
 
   useEffect(() => {
     if (!user) return;
@@ -121,7 +135,8 @@ function ProfilePage() {
   const save = async () => {
     if (!user) return;
     setSaving(true);
-    const { error } = await supabase.from("profiles").update({
+    const { error } = await supabase.from("profiles").upsert({
+      id: user.id,
       full_name: form.full_name || null,
       username: form.username || null,
       bio: form.bio || null,
@@ -133,7 +148,7 @@ function ProfilePage() {
       portfolio_url: form.portfolio_url || null,
       avatar_url: form.avatar_url || null,
       profile_completed: completion >= 75,
-    } as never).eq("id", user.id);
+    } as never, { onConflict: "id" });
     await (supabase as any).from("activity_history").insert({
       user_id: user.id,
       action: "profile_updated",
@@ -146,6 +161,39 @@ function ProfilePage() {
     }
     localStorage.removeItem(DRAFT_KEY);
     toast.success("Profile updated.");
+    // notify auth hook to refresh profile across the app without a full reload
+    window.dispatchEvent(new Event("profile_updated"));
+  };
+
+  const unfollowProfile = async (profileId: string) => {
+    if (!user) return;
+    const { error } = await (supabase as any)
+      .from("user_follows")
+      .delete()
+      .eq("follower_id", user.id)
+      .eq("following_id", profileId);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    setFollowingProfiles((current) => current.filter((item) => item.id !== profileId));
+    setSocialStats((current) => ({ ...current, following: Math.max(0, current.following - 1) }));
+    toast.success("Unfollowed.");
+  };
+
+  const deleteAccount = async () => {
+    if (!user) return;
+    setDeleting(true);
+    const { error } = await (supabase as any).rpc("delete_current_user");
+    setDeleting(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    localStorage.removeItem(DRAFT_KEY);
+    await supabase.auth.signOut();
+    toast.success("Account deleted.");
+    navigate({ to: "/" });
   };
 
   return (
@@ -229,14 +277,23 @@ function ProfilePage() {
             </div>
           </div>
         </div>
-        <button
-          onClick={save}
-          disabled={saving}
-          className="mt-6 flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold disabled:opacity-60"
-        >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Save profile
-        </button>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold disabled:opacity-60"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Save profile
+          </button>
+          <button
+            onClick={() => setDeleteConfirm(true)}
+            className="flex items-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-100 transition hover:bg-red-500/15"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete account
+          </button>
+        </div>
       </section>
 
       {listMode && (
@@ -245,8 +302,40 @@ function ProfilePage() {
           teams={teams}
           followers={followers}
           following={followingProfiles}
+          onUnfollow={unfollowProfile}
           onClose={() => setListMode(null)}
         />
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-[95] grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+          <motion.div initial={{ opacity: 0, y: 16, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="glass-strong neon-border w-full max-w-md rounded-2xl p-6">
+            <div className="flex items-start gap-3">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-red-500/15 text-red-100">
+                <AlertTriangle className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-xl font-bold">Delete account?</h2>
+                <p className="mt-2 text-sm leading-6 text-white/60">
+                  This removes your SyncUp account and related profile data. This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button onClick={() => setDeleteConfirm(false)} className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white/75 hover:bg-white/10">
+                Cancel
+              </button>
+              <button
+                onClick={deleteAccount}
+                disabled={deleting}
+                className="flex items-center justify-center gap-2 rounded-xl bg-red-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-400 disabled:opacity-60"
+              >
+                {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                Delete account
+              </button>
+            </div>
+          </motion.div>
+        </div>
       )}
     </div>
   );
@@ -308,12 +397,14 @@ function SocialListModal({
   teams,
   followers,
   following,
+  onUnfollow,
   onClose,
 }: {
   mode: SocialListMode;
   teams: TeamSummary[];
   followers: Profile[];
   following: Profile[];
+  onUnfollow?: (profileId: string) => void;
   onClose: () => void;
 }) {
   const title = mode === "teams" ? "Teams" : mode === "followers" ? "Followers" : "Following";
@@ -347,25 +438,34 @@ function SocialListModal({
               <p className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/50">No teams yet.</p>
             )
           ) : people.length ? people.map((person) => (
-            <Link
-              key={person.id}
-              to="/profiles/$id"
-              params={{ id: person.id }}
-              onClick={onClose}
-              className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
-            >
-              {person.avatar_url ? (
-                <img src={person.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
-              ) : (
-                <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-                  {initials(person)}
-                </span>
+            <div key={person.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10">
+              <Link
+                to="/profiles/$id"
+                params={{ id: person.id }}
+                onClick={onClose}
+                className="flex min-w-0 flex-1 items-center gap-3"
+              >
+                {person.avatar_url ? (
+                  <img src={person.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
+                ) : (
+                  <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
+                    {initials(person)}
+                  </span>
+                )}
+                <div className="min-w-0">
+                  <p className="truncate font-semibold">{person.full_name || person.username || "SyncUp user"}</p>
+                  <p className="truncate text-xs text-white/50">@{person.username || "profile"} - {person.role || "Builder"}</p>
+                </div>
+              </Link>
+              {mode === "following" && onUnfollow && (
+                <button
+                  onClick={() => onUnfollow(person.id)}
+                  className="shrink-0 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-300/15"
+                >
+                  Unfollow
+                </button>
               )}
-              <div className="min-w-0">
-                <p className="truncate font-semibold">{person.full_name || person.username || "SyncUp user"}</p>
-                <p className="truncate text-xs text-white/50">@{person.username || "profile"} - {person.role || "Builder"}</p>
-              </div>
-            </Link>
+            </div>
           )) : (
             <p className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/50">
               No {mode} yet.

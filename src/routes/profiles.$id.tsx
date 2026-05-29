@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Github, Globe, Linkedin, MessageSquare, Send, ShieldCheck, Trophy, UserPlus, UserCheck, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
@@ -37,6 +37,7 @@ function ProfileDetailRoute() {
 function ProfileDetail() {
   const { id } = Route.useParams();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [stats, setStats] = useState({ teams: 0, requests: 0, followers: 0, following: 0 });
   const [teams, setTeams] = useState<TeamSummary[]>([]);
@@ -51,6 +52,13 @@ function ProfileDetail() {
   const [messages, setMessages] = useState<Array<{ id: string; sender_id: string; message: string; created_at: string }>>([]);
 
   useEffect(() => {
+    if (user?.id === id) {
+      navigate({ to: "/profile", replace: true });
+    }
+  }, [id, user?.id, navigate]);
+
+  useEffect(() => {
+    if (user?.id === id) return;
     supabase.from("profiles").select("*").eq("id", id).maybeSingle().then(({ data }) => setProfile((data as Profile) ?? null));
     Promise.all([
       supabase.from("team_members").select("team_id").eq("user_id", id),
@@ -85,6 +93,8 @@ function ProfileDetail() {
       setIsFollowing(Boolean(followRow.data));
     });
   }, [id, user?.id]);
+
+  if (user?.id === id) return null;
 
   if (!profile) {
     return (
