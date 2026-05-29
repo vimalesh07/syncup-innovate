@@ -697,8 +697,8 @@ function MessagesPage() {
         </div>
       </div>
 
-      <div className="grid min-h-[720px] min-w-0 gap-6 lg:grid-cols-[0.36fr_0.64fr]">
-        <aside className="glass-strong min-w-0 rounded-2xl p-4">
+      <div className="grid min-h-[calc(100svh-11rem)] min-w-0 gap-4 lg:grid-cols-[0.36fr_0.64fr] lg:gap-6">
+        <aside className="glass-strong min-w-0 rounded-2xl p-3 sm:p-4">
           <div className="relative mb-4">
             <Search className="absolute left-3 top-3 h-4 w-4 text-white/35" />
             <input
@@ -799,7 +799,7 @@ function MessagesPage() {
       </div>
 
       {compactChat && chatOpen && selected && (
-        <div className="fixed inset-0 z-[90] bg-[#0B0F19] xl:hidden">
+        <div className="message-mobile-sheet fixed inset-x-0 bottom-0 top-16 z-[45] overflow-hidden xl:hidden">
           <Conversation
             selected={selected}
             userId={user?.id}
@@ -958,7 +958,7 @@ function Conversation({
 }) {
   return (
     <div
-      className={`relative flex min-h-0 w-full flex-col ${dragging ? "ring-2 ring-cyan-300/70" : ""}`}
+      className={`relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden ${dragging ? "ring-2 ring-cyan-300/70" : ""}`}
       onDragOver={(event) => {
         event.preventDefault();
         onDrag(true);
@@ -970,20 +970,20 @@ function Conversation({
         onAttach(event.dataTransfer.files);
       }}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
-        <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/10 p-3 sm:gap-3 sm:p-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {onBack && (
-            <button onClick={onBack} className="rounded-xl p-2 hover:bg-white/10">
+            <button onClick={onBack} className="shrink-0 rounded-xl p-2 hover:bg-white/10">
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
           <AvatarButton thread={selected} profile={selected.profileId ? profiles.get(selected.profileId) : undefined} onOpen={onProfileOpen} />
           <div className="min-w-0">
-            <h2 className="truncate text-xl font-semibold">{selected.title}</h2>
+            <h2 className="truncate text-base font-semibold sm:text-xl">{selected.title}</h2>
             <PresenceLine presence={presence} typing={selectedTyping} />
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 gap-1.5 sm:gap-2">
           <button onClick={onPinnedToggle} className="rounded-xl border border-white/10 bg-white/5 p-2 hover:bg-white/10" title="Pinned messages">
             <Pin className="h-4 w-4" />
           </button>
@@ -1009,7 +1009,7 @@ function Conversation({
         </div>
       )}
 
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4">
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4">
         {selected.messages.length ? selected.messages.map((message, index) => {
           const prev = selected.messages[index - 1];
           const showDate = !prev || dateLabel(prev.created_at) !== dateLabel(message.created_at);
@@ -1096,8 +1096,11 @@ function MessageBubble(props: {
           {profile?.avatar_url ? <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(profile ?? { full_name: thread.title, username: null } as Profile)}
         </button>
       ) : <span className="h-8 w-8 shrink-0" />}
-      <div className={`relative max-w-[82%] ${own ? "items-end" : "items-start"}`}>
-        <div className={`rounded-2xl px-4 py-3 text-sm ${own ? "bg-cyan-300/20 text-cyan-50" : "bg-white/8 text-white/75"} ${grouped ? own ? "rounded-tr-md" : "rounded-tl-md" : ""}`}>
+      <div className={`relative min-w-0 max-w-[calc(100vw-5.5rem)] sm:max-w-[82%] ${own ? "items-end" : "items-start"}`}>
+        <div className={`relative rounded-2xl px-3 py-2.5 text-sm sm:px-4 sm:py-3 ${own ? "message-bubble-own bg-cyan-300/20 text-cyan-50" : "message-bubble-other bg-white/8 text-white/75"} ${grouped ? own ? "rounded-tr-md" : "rounded-tl-md" : ""}`}>
+          <button onClick={() => props.onMenu(openMenu ? null : message.id)} className="message-action-button absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-lg border border-white/10 sm:hidden" title="Message actions">
+            <MoreVertical className="h-4 w-4" />
+          </button>
           {(message.pinned_by ?? []).length > 0 && (
             <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-cyan-300/15 px-2 py-0.5 text-[10px] font-semibold text-cyan-100">
               <Pin className="h-3 w-3" />
@@ -1109,7 +1112,7 @@ function MessageBubble(props: {
               Replying to: {reply.message || attachmentSubtitle(reply)}
             </button>
           )}
-          {message.message && <p className="whitespace-pre-wrap break-words">{highlight(message.message, query)}</p>}
+          {message.message && <p className="whitespace-pre-wrap break-words pr-6 [overflow-wrap:anywhere] sm:pr-0">{highlight(message.message, query)}</p>}
           <Attachments message={message} />
           <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-white/35">
             {message.edited_at && <span>edited</span>}
@@ -1118,7 +1121,7 @@ function MessageBubble(props: {
           </div>
         </div>
         <ReactionCounts message={message} onReaction={(reaction) => props.onReaction(message, reaction)} />
-        <div className={`absolute top-0 hidden gap-1 group-hover:flex ${own ? "right-full mr-2" : "left-full ml-2"}`}>
+        <div className={`absolute top-0 hidden gap-1 sm:group-hover:flex ${own ? "right-full mr-2" : "left-full ml-2"}`}>
           <IconButton title="Reply" icon={Reply} onClick={() => props.onReply(message)} />
           <IconButton title="React" icon={SmilePlus} onClick={() => props.onMenu(openMenu ? null : message.id)} />
           <IconButton title="Copy" icon={Copy} onClick={() => props.onCopy(message)} />
@@ -1163,7 +1166,7 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
   onRemoveAttachment: (index: number) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="message-composer sticky bottom-0 border-t border-white/10 p-4 backdrop-blur-xl">
+    <form onSubmit={onSubmit} className="message-composer sticky bottom-0 border-t border-white/10 p-3 backdrop-blur-xl sm:p-4">
       {(editing || replyTo) && (
         <div className="mb-3 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm">
           <span className="truncate text-white/60">{editing ? "Editing message" : `Replying to: ${replyTo?.message || attachmentSubtitle(replyTo)}`}</span>
@@ -1181,20 +1184,20 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
           ))}
         </div>
       )}
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <label className="grid h-12 w-12 cursor-pointer place-items-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 sm:h-12 sm:w-12">
           <Paperclip className="h-5 w-5" />
           <input type="file" multiple className="hidden" onChange={(event) => event.target.files && onAttach(event.target.files)} />
         </label>
         <input
           value={text}
           onChange={(event) => onTextChange(event.target.value)}
-          className="min-h-12 flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+          className="min-h-11 min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none transition focus:border-cyan-300 sm:min-h-12 sm:px-4 sm:py-3"
           placeholder="Write a message..."
         />
-        <button disabled={sending || (!text.trim() && !attachments.length)} className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold disabled:opacity-60">
+        <button disabled={sending || (!text.trim() && !attachments.length)} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-sm font-semibold disabled:opacity-60 sm:flex sm:h-12 sm:w-auto sm:gap-2 sm:px-5">
           {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {editing ? "Save" : "Send"}
+          <span className="hidden sm:inline">{editing ? "Save" : "Send"}</span>
         </button>
       </div>
     </form>
@@ -1203,9 +1206,9 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
 
 function ThreadCard({ thread, active, presence, typingNames, muted, onOpen }: { thread: Thread; active: boolean; presence?: Presence; typingNames: string[]; muted: boolean; onOpen: () => void }) {
   return (
-    <button onClick={onOpen} className={`w-full overflow-hidden rounded-2xl border p-4 text-left transition ${active ? "border-cyan-300/50 bg-cyan-300/10" : thread.unreadCount ? "border-cyan-300/30 bg-cyan-300/5" : "border-white/10 bg-white/5 hover:bg-white/10"}`}>
+    <button onClick={onOpen} className={`w-full overflow-hidden rounded-2xl border p-3 text-left transition sm:p-4 ${active ? "border-cyan-300/50 bg-cyan-300/10" : thread.unreadCount ? "border-cyan-300/30 bg-cyan-300/5" : "border-white/10 bg-white/5 hover:bg-white/10"}`}>
       <div className="flex items-center gap-3">
-        <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-sm font-bold ring-1 ring-white/10">
+        <span className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-sm font-bold ring-1 ring-white/10 sm:h-11 sm:w-11">
           {thread.avatarUrl ? <img src={thread.avatarUrl} alt="" className="h-full w-full object-cover" /> : thread.profileId ? initials({ full_name: thread.title, username: null } as Profile) : <Users className="h-4 w-4" />}
           {presence && <span className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-[#0B0F19] ${presenceColor(presence)}`} />}
         </span>
@@ -1229,7 +1232,7 @@ function ThreadCard({ thread, active, presence, typingNames, muted, onOpen }: { 
 
 function AvatarButton({ thread, profile, onOpen }: { thread: Thread; profile?: Profile; onOpen: (profile: Profile) => void }) {
   return (
-    <button onClick={() => profile && onOpen(profile)} className="relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 font-bold ring-1 ring-white/10">
+    <button onClick={() => profile && onOpen(profile)} className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-sm font-bold ring-1 ring-white/10 sm:h-12 sm:w-12 sm:text-base">
       {thread.avatarUrl ? <img src={thread.avatarUrl} alt="" className="h-full w-full object-cover" /> : thread.profileId ? initials({ full_name: thread.title, username: null } as Profile) : <Users className="h-5 w-5" />}
     </button>
   );

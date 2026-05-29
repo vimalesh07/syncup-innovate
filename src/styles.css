@@ -298,7 +298,8 @@ html[data-theme="light"] .syncup-app .text-gradient {
 .message-action-menu,
 .message-reaction,
 .message-composer,
-.message-profile-drawer {
+.message-profile-drawer,
+.message-mobile-sheet {
   background-color: rgba(11, 15, 25, 0.92);
   color: rgba(255, 255, 255, 0.82);
 }
@@ -314,11 +315,13 @@ html[data-theme="light"] .syncup-app .text-gradient {
 .syncup-app.theme-light .message-reaction,
 .syncup-app.theme-light .message-composer,
 .syncup-app.theme-light .message-profile-drawer,
+.syncup-app.theme-light .message-mobile-sheet,
 html[data-theme="light"] .syncup-app .message-action-button,
 html[data-theme="light"] .syncup-app .message-action-menu,
 html[data-theme="light"] .syncup-app .message-reaction,
 html[data-theme="light"] .syncup-app .message-composer,
-html[data-theme="light"] .syncup-app .message-profile-drawer {
+html[data-theme="light"] .syncup-app .message-profile-drawer,
+html[data-theme="light"] .syncup-app .message-mobile-sheet {
   background-color: rgba(255, 255, 255, 0.94) !important;
   color: #0f172a !important;
   border-color: rgba(15, 23, 42, 0.14) !important;
@@ -331,6 +334,35 @@ html[data-theme="light"] .syncup-app .message-action-button:hover,
 html[data-theme="light"] .syncup-app .message-action-menu button:hover,
 html[data-theme="light"] .syncup-app .message-reaction:hover {
   background-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+.message-bubble-own,
+.message-bubble-other {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.syncup-app.theme-light .message-bubble-own,
+html[data-theme="light"] .syncup-app .message-bubble-own {
+  background-color: rgba(15, 23, 42, 0.12) !important;
+  color: #0f172a !important;
+}
+
+.syncup-app.theme-light .message-bubble-other,
+html[data-theme="light"] .syncup-app .message-bubble-other {
+  background-color: rgba(15, 23, 42, 0.06) !important;
+  color: #0f172a !important;
+}
+
+@media (max-width: 767px) {
+  .syncup-app {
+    overflow-x: hidden;
+  }
+
+  .message-mobile-sheet {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
 }
 
 /* Custom scrollbar */
