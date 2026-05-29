@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Camera, Github, Globe, Linkedin, Loader2, Save, Send, ShieldCheck, Trophy, Users, X } from "lucide-react";
+import { Camera, Github, Globe, Linkedin, Loader2, Save, ShieldCheck, Trophy, UserCheck, UserPlus, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
@@ -16,6 +16,16 @@ export const Route = createFileRoute("/profile")({
 
 const skillOptions = ["React", "AI/ML", "UI/UX", "Python", "Backend", "Research", "Pitching", "Product"];
 
+type TeamSummary = {
+  id: string;
+  team_name: string;
+  team_purpose?: string | null;
+  project_title: string | null;
+  leader_id: string;
+};
+
+type SocialListMode = "teams" | "followers" | "following";
+
 function ProfileRoute() {
   return (
     <ProtectedPage>
@@ -29,11 +39,44 @@ function ProfileRoute() {
 function ProfilePage() {
   const { profile, user } = useAuth();
   const [form, setForm] = useState<Partial<Profile>>({});
+  const [socialStats, setSocialStats] = useState({ teams: 0, followers: 0, following: 0 });
+  const [teams, setTeams] = useState<TeamSummary[]>([]);
+  const [followers, setFollowers] = useState<Profile[]>([]);
+  const [followingProfiles, setFollowingProfiles] = useState<Profile[]>([]);
+  const [listMode, setListMode] = useState<SocialListMode | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (profile) setForm(profile);
   }, [profile]);
+
+  useEffect(() => {
+    if (!user) return;
+    Promise.all([
+      supabase.from("team_members").select("team_id").eq("user_id", user.id),
+      (supabase as any).from("user_follows").select("follower_id").eq("following_id", user.id),
+      (supabase as any).from("user_follows").select("following_id").eq("follower_id", user.id),
+    ]).then(async ([memberships, followerRows, followingRows]) => {
+      const teamIds = [...new Set(((memberships.data as Array<{ team_id: string }>) ?? []).map((item) => item.team_id))];
+      const followerIds = [...new Set(((followerRows.data as Array<{ follower_id: string }>) ?? []).map((item) => item.follower_id))];
+      const followingIds = [...new Set(((followingRows.data as Array<{ following_id: string }>) ?? []).map((item) => item.following_id))];
+
+      const [teamRows, followerProfiles, followingProfileRows] = await Promise.all([
+        teamIds.length ? supabase.from("teams").select("id, team_name, team_purpose, project_title, leader_id").in("id", teamIds) : { data: [] },
+        followerIds.length ? supabase.from("profiles").select("*").in("id", followerIds) : { data: [] },
+        followingIds.length ? supabase.from("profiles").select("*").in("id", followingIds) : { data: [] },
+      ]);
+
+      setTeams((teamRows.data as TeamSummary[]) ?? []);
+      setFollowers((followerProfiles.data as Profile[]) ?? []);
+      setFollowingProfiles((followingProfileRows.data as Profile[]) ?? []);
+      setSocialStats({
+        teams: teamIds.length,
+        followers: followerIds.length,
+        following: followingIds.length,
+      });
+    });
+  }, [user?.id]);
 
   const update = (key: keyof Profile, value: string | string[]) => setForm((current) => ({ ...current, [key]: value }));
   const skills = form.skills ?? [];
@@ -112,10 +155,12 @@ function ProfilePage() {
             </div>
           </div>
 
-          <div className="mt-6 grid w-full grid-cols-3 gap-3">
+          <div className="mt-6 grid w-full grid-cols-2 gap-3">
             <Stat icon={ShieldCheck} label="Reliability" value={form.reliability_score ?? 100} />
             <Stat icon={Trophy} label="Wins" value={0} />
-            <Stat icon={Users} label="Teams" value={0} />
+            <Stat icon={Users} label="Teams" value={socialStats.teams} onClick={() => setListMode("teams")} />
+            <Stat icon={UserPlus} label="Followers" value={socialStats.followers} onClick={() => setListMode("followers")} />
+            <Stat icon={UserCheck} label="Following" value={socialStats.following} onClick={() => setListMode("following")} />
           </div>
         </div>
       </section>
@@ -169,6 +214,16 @@ function ProfilePage() {
           Save profile
         </button>
       </section>
+
+      {listMode && (
+        <SocialListModal
+          mode={listMode}
+          teams={teams}
+          followers={followers}
+          following={followingProfiles}
+          onClose={() => setListMode(null)}
+        />
+      )}
     </div>
   );
 }
@@ -199,12 +254,101 @@ function Field({
   );
 }
 
-function Stat({ icon: Icon, label, value }: { icon: typeof ShieldCheck; label: string; value: number }) {
-  return (
-    <div className="rounded-xl bg-white/5 p-3">
+function Stat({ icon: Icon, label, value, onClick }: { icon: typeof ShieldCheck; label: string; value: number; onClick?: () => void }) {
+  const className = `rounded-xl bg-white/5 p-3 text-center transition ${onClick ? "hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-cyan-300/40" : ""}`;
+  const content = (
+    <>
       <Icon className="mx-auto h-4 w-4 text-cyan-300" />
       <p className="mt-2 text-lg font-bold">{value}</p>
       <p className="text-[11px] text-white/45">{label}</p>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className={className}>
+      {content}
+    </div>
+  );
+}
+
+function SocialListModal({
+  mode,
+  teams,
+  followers,
+  following,
+  onClose,
+}: {
+  mode: SocialListMode;
+  teams: TeamSummary[];
+  followers: Profile[];
+  following: Profile[];
+  onClose: () => void;
+}) {
+  const title = mode === "teams" ? "Teams" : mode === "followers" ? "Followers" : "Following";
+  const people = mode === "followers" ? followers : following;
+
+  return (
+    <div className="fixed inset-0 z-[90] grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+      <motion.div initial={{ opacity: 0, y: 16, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="glass-strong neon-border max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-2xl p-6">
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-2xl font-bold">{title}</h2>
+          <button onClick={onClose} className="rounded-xl p-2 text-white/60 hover:bg-white/10">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="mt-5 max-h-[65vh] space-y-3 overflow-y-auto">
+          {mode === "teams" ? (
+            teams.length ? teams.map((team) => (
+              <Link
+                key={team.id}
+                to="/teams/$id"
+                params={{ id: team.id }}
+                onClick={onClose}
+                className="block rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
+              >
+                <p className="font-semibold">{team.team_name}</p>
+                <p className="mt-1 text-sm text-cyan-100/70">{team.project_title || "Project pending"}</p>
+                <p className="mt-2 text-xs text-white/45">{team.team_purpose || "Team workspace"}</p>
+              </Link>
+            )) : (
+              <p className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/50">No teams yet.</p>
+            )
+          ) : people.length ? people.map((person) => (
+            <Link
+              key={person.id}
+              to="/profiles/$id"
+              params={{ id: person.id }}
+              onClick={onClose}
+              className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
+            >
+              {person.avatar_url ? (
+                <img src={person.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
+              ) : (
+                <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
+                  {initials(person)}
+                </span>
+              )}
+              <div className="min-w-0">
+                <p className="truncate font-semibold">{person.full_name || person.username || "SyncUp user"}</p>
+                <p className="truncate text-xs text-white/50">@{person.username || "profile"} - {person.role || "Builder"}</p>
+              </div>
+            </Link>
+          )) : (
+            <p className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/50">
+              No {mode} yet.
+            </p>
+          )}
+        </div>
+      </motion.div>
     </div>
   );
 }

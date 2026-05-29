@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Heart, MessageCircle, Send, Share2, Trash2, Users, X } from "lucide-react";
+import { Ban, Flag, Heart, MessageCircle, MoreVertical, Send, Share2, Trash2, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
@@ -8,6 +8,7 @@ import { ProtectedPage } from "@/components/app/ProtectedPage";
 import { supabase } from "@/integrations/supabase/client";
 import { Profile, initials } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
+import { notifyFollowers } from "@/lib/social";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Home | SyncUp" }] }),
@@ -58,12 +59,22 @@ function DashboardRoute() {
 
 function HomeFeed() {
   const { profile, user } = useAuth();
-  const [postText, setPostText] = useState("");
+  const [postText, setPostText] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem("syncup_dashboard_post_draft") ?? "";
+  });
   const [commentText, setCommentText] = useState<Record<string, string>>({});
   const [posts, setPosts] = useState<Post[]>([]);
+  const [feedMode, setFeedMode] = useState<"all" | "following">(() => {
+    if (typeof window === "undefined") return "all";
+    return window.localStorage.getItem("syncup_dashboard_feed_mode") === "following" ? "following" : "all";
+  });
   const [teams, setTeams] = useState<Team[]>([]);
   const [shareTargets, setShareTargets] = useState<ShareTarget[]>([]);
   const [postToShare, setPostToShare] = useState<Post | null>(null);
+  const [postToReport, setPostToReport] = useState<Post | null>(null);
+  const [reportReason, setReportReason] = useState("Harassment or hate");
+  const [reportDetails, setReportDetails] = useState("");
   const [sharingTo, setSharingTo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
@@ -72,8 +83,33 @@ function HomeFeed() {
     if (!user) return;
     setLoading(true);
 
-    const postRows = await (supabase as any).from("posts").select("*").order("created_at", { ascending: false }).limit(30);
-    const rows = (postRows.data as Array<Omit<Post, "profile" | "likes" | "comments" | "shares" | "liked">>) ?? [];
+    const followingRows = await (supabase as any)
+      .from("user_follows")
+      .select("following_id")
+      .eq("follower_id", user.id);
+    const blockRows = await (supabase as any)
+      .from("user_blocks")
+      .select("blocked_id")
+      .eq("blocker_id", user.id);
+    const followingIds = ((followingRows.data as Array<{ following_id: string }>) ?? []).map((item) => item.following_id);
+    const blockedIds = ((blockRows.data as Array<{ blocked_id: string }>) ?? []).map((item) => item.blocked_id);
+    const visibleAuthorIds = feedMode === "following" ? [...new Set([user.id, ...followingIds])] : [];
+
+    let postQuery = (supabase as any).from("posts").select("*").order("created_at", { ascending: false }).limit(30);
+    if (feedMode === "following") {
+      if (!visibleAuthorIds.length) {
+        setPosts([]);
+        setTeams([]);
+        setShareTargets([]);
+        setLoading(false);
+        return;
+      }
+      postQuery = postQuery.in("user_id", visibleAuthorIds);
+    }
+
+    const postRows = await postQuery;
+    const rows = ((postRows.data as Array<Omit<Post, "profile" | "likes" | "comments" | "shares" | "liked">>) ?? [])
+      .filter((post) => !blockedIds.includes(post.user_id));
     const postIds = rows.map((post) => post.id);
 
     const [profileRows, likeRows, commentRows, shareRows, memberships] = await Promise.all([
@@ -134,7 +170,15 @@ function HomeFeed() {
 
   useEffect(() => {
     loadHome();
-  }, [user?.id]);
+  }, [user?.id, feedMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem("syncup_dashboard_post_draft", postText);
+  }, [postText]);
+
+  useEffect(() => {
+    window.localStorage.setItem("syncup_dashboard_feed_mode", feedMode);
+  }, [feedMode]);
 
   const createPost = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -146,7 +190,13 @@ function HomeFeed() {
       toast.error(error.message);
       return;
     }
+    await notifyFollowers(
+      user.id,
+      "New post from someone you follow",
+      `${profile?.full_name || profile?.username || user.email} shared a new post.`,
+    );
     setPostText("");
+    window.localStorage.removeItem("syncup_dashboard_post_draft");
     await loadHome();
   };
 
@@ -189,6 +239,49 @@ function HomeFeed() {
     await loadHome();
   };
 
+  const openReport = (post: Post) => {
+    setPostToReport(post);
+    setReportReason("Harassment or hate");
+    setReportDetails("");
+  };
+
+  const submitReport = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!user || !postToReport) return;
+
+    const { error } = await (supabase as any).from("post_reports").insert({
+      post_id: postToReport.id,
+      reporter_id: user.id,
+      reported_user_id: postToReport.user_id,
+      reason: reportReason,
+      details: reportDetails.trim() || null,
+    });
+
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "You already reported this post." : error.message);
+      return;
+    }
+
+    toast.success("Report sent. Thanks for helping keep SyncUp safe.");
+    setPostToReport(null);
+  };
+
+  const blockUser = async (post: Post) => {
+    if (!user || post.user_id === user.id) return;
+    const { error } = await (supabase as any).from("user_blocks").insert({
+      blocker_id: user.id,
+      blocked_id: post.user_id,
+    });
+
+    if (error && !error.message.includes("duplicate")) {
+      toast.error(error.message);
+      return;
+    }
+
+    setPosts((current) => current.filter((item) => item.user_id !== post.user_id));
+    toast.success(`${post.profile?.full_name || post.profile?.username || "User"} blocked. Their posts are hidden.`);
+  };
+
   const sharePostToDm = async (target: ShareTarget) => {
     if (!user || !postToShare) return;
     setSharingTo(target.id);
@@ -228,8 +321,25 @@ function HomeFeed() {
     <div className="grid gap-6 xl:grid-cols-[1fr_0.38fr]">
       <section className="space-y-5">
         <div className="glass-strong neon-border rounded-2xl p-6">
-          <h1 className="text-3xl font-bold">Home</h1>
-          <p className="mt-2 text-white/55">Posts from builders, teams, and hackathon collaborators.</p>
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+            <div>
+              <h1 className="text-3xl font-bold">Home</h1>
+              <p className="mt-2 text-white/55">Posts from builders, teams, and hackathon collaborators.</p>
+            </div>
+            <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-white/5 p-1 text-sm">
+              {(["all", "following"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setFeedMode(mode)}
+                  className={`rounded-lg px-4 py-2 font-semibold capitalize transition ${
+                    feedMode === mode ? "bg-cyan-300 text-[#0B0F19]" : "text-white/60 hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <form onSubmit={createPost} className="glass-strong rounded-2xl p-5">
@@ -271,11 +381,13 @@ function HomeFeed() {
             onComment={(event) => addComment(event, post)}
             onShare={() => sharePost(post)}
             onDelete={() => deletePost(post)}
+            onReport={() => openReport(post)}
+            onBlock={() => blockUser(post)}
             currentUserId={user?.id}
           />
         )) : (
           <div className="glass-strong rounded-2xl border border-dashed border-white/15 p-10 text-center text-white/55">
-            No posts yet. Share the first team invite or hackathon update.
+            {feedMode === "following" ? "No posts from people you follow yet. Follow builders from their profiles to build your feed." : "No posts yet. Share the first team invite or hackathon update."}
           </div>
         )}
       </section>
@@ -289,7 +401,11 @@ function HomeFeed() {
                 <p className="font-semibold">{team.team_name}</p>
                 <p className="text-xs text-white/50">{team.team_purpose || "Team"} · {team.project_title || "Project pending"}</p>
               </Link>
-            )) : <p className="rounded-xl bg-white/5 p-4 text-sm text-white/55">Join or create a team to see it here.</p>}
+            )) : (
+              <Link to="/my-teams" className="block rounded-xl bg-white/5 p-4 text-sm text-white/55 transition hover:bg-white/10 hover:text-cyan-200">
+                Join or create a team to see it here.
+              </Link>
+            )}
           </div>
         </section>
         <SignalScout />
@@ -346,6 +462,51 @@ function HomeFeed() {
           </motion.div>
         </div>
       )}
+
+      {postToReport && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+          <motion.form initial={{ opacity: 0, y: 16, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} onSubmit={submitReport} className="glass-strong neon-border w-full max-w-lg rounded-2xl p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold">Report post</h2>
+                <p className="mt-1 text-sm text-white/55">Tell us what feels unsafe or against the guidelines.</p>
+              </div>
+              <button type="button" onClick={() => setPostToReport(null)} className="rounded-xl p-2 text-white/60 hover:bg-white/10">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-5 rounded-2xl bg-white/5 p-4">
+              <p className="line-clamp-3 text-sm text-white/65">{postToReport.content}</p>
+            </div>
+            <label className="mt-5 block text-xs text-white/60">Reason</label>
+            <select
+              value={reportReason}
+              onChange={(event) => setReportReason(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+            >
+              <option>Harassment or hate</option>
+              <option>Spam or scam</option>
+              <option>False or misleading opportunity</option>
+              <option>Private information</option>
+              <option>Inappropriate content</option>
+              <option>Other</option>
+            </select>
+            <label className="mt-4 block text-xs text-white/60">Details</label>
+            <textarea
+              value={reportDetails}
+              onChange={(event) => setReportDetails(event.target.value)}
+              rows={4}
+              maxLength={500}
+              className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none focus:border-cyan-300"
+              placeholder="Optional context for review"
+            />
+            <button className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold">
+              <Flag className="h-4 w-4" />
+              Submit report
+            </button>
+          </motion.form>
+        </div>
+      )}
     </div>
   );
 }
@@ -358,6 +519,8 @@ function PostCard({
   onComment,
   onShare,
   onDelete,
+  onReport,
+  onBlock,
   currentUserId,
 }: {
   post: Post;
@@ -367,8 +530,24 @@ function PostCard({
   onComment: (event: React.FormEvent) => void;
   onShare: () => void;
   onDelete: () => void;
+  onReport: () => void;
+  onBlock: () => void;
   currentUserId?: string;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof window === "undefined") return "light";
+    return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <motion.article initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong rounded-2xl p-5">
       <div className="flex items-start justify-between gap-3">
@@ -377,7 +556,7 @@ function PostCard({
           <img src={post.profile.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
         ) : (
           <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-            {initials(post.profile)}
+            {initials(post.profile ?? null)}
           </span>
         )}
         <div>
@@ -385,11 +564,41 @@ function PostCard({
           <p className="text-xs text-white/45">{post.profile?.role || "Builder"} · {new Date(post.created_at).toLocaleString()}</p>
         </div>
       </Link>
-        {currentUserId === post.user_id && (
-          <button onClick={onDelete} className="rounded-xl p-2 text-red-200 hover:bg-red-500/10" title="Delete post">
-            <Trash2 className="h-4 w-4" />
+        <div className="relative">
+          <button onClick={() => setMenuOpen((current) => !current)} className="rounded-xl p-2 text-white/60 hover:bg-white/10" title="Post options">
+            <MoreVertical className="h-4 w-4" />
           </button>
-        )}
+          {menuOpen && (
+            <div
+              className={`absolute right-0 top-10 z-20 w-48 rounded-xl border p-2 shadow-2xl ${
+                theme === "light" ? "border-slate-200 bg-white text-slate-900" : "border-white/10 bg-[#101827] text-white"
+              }`}
+            >
+              {currentUserId === post.user_id ? (
+                <button onClick={onDelete} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50">
+                  <Trash2 className="h-4 w-4" />
+                  Delete post
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setMenuOpen(false); onReport(); }}
+                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs ${
+                      theme === "light" ? "text-slate-700 hover:bg-slate-100" : "text-white/75 hover:bg-white/10"
+                    }`}
+                  >
+                    <Flag className={`h-4 w-4 ${theme === "light" ? "text-cyan-700" : "text-cyan-200"}`} />
+                    Report post
+                  </button>
+                  <button onClick={() => { setMenuOpen(false); onBlock(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50">
+                    <Ban className="h-4 w-4" />
+                    Block user
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-white/75">{post.content}</p>
       <div className="mt-5 flex flex-wrap items-center gap-2 border-y border-white/10 py-3">

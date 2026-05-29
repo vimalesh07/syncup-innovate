@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Github, Globe, Linkedin, MessageSquare, Send, ShieldCheck, Trophy, Users, X } from "lucide-react";
+import { Github, Globe, Linkedin, MessageSquare, Send, ShieldCheck, Trophy, UserPlus, UserCheck, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -8,6 +8,16 @@ import { ProtectedPage } from "@/components/app/ProtectedPage";
 import { supabase } from "@/integrations/supabase/client";
 import { Profile, initials, profileCompletion } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
+
+type TeamSummary = {
+  id: string;
+  team_name: string;
+  team_purpose?: string | null;
+  project_title: string | null;
+  leader_id: string;
+};
+
+type SocialListMode = "teams" | "followers" | "following";
 
 export const Route = createFileRoute("/profiles/$id")({
   head: () => ({ meta: [{ title: "Profile | SyncUp" }] }),
@@ -28,7 +38,14 @@ function ProfileDetail() {
   const { id } = Route.useParams();
   const { user } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [stats, setStats] = useState({ teams: 0, requests: 0 });
+  const [stats, setStats] = useState({ teams: 0, requests: 0, followers: 0, following: 0 });
+  const [teams, setTeams] = useState<TeamSummary[]>([]);
+  const [followers, setFollowers] = useState<Profile[]>([]);
+  const [followingProfiles, setFollowingProfiles] = useState<Profile[]>([]);
+  const [listMode, setListMode] = useState<SocialListMode | null>(null);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
+  const [posts, setPosts] = useState<Array<{ id: string; content: string; created_at: string }>>([]);
   const [messageOpen, setMessageOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Array<{ id: string; sender_id: string; message: string; created_at: string }>>([]);
@@ -36,10 +53,38 @@ function ProfileDetail() {
   useEffect(() => {
     supabase.from("profiles").select("*").eq("id", id).maybeSingle().then(({ data }) => setProfile((data as Profile) ?? null));
     Promise.all([
-      supabase.from("team_members").select("*", { count: "exact", head: true }).eq("user_id", id),
+      supabase.from("team_members").select("team_id").eq("user_id", id),
       supabase.from("join_requests").select("*", { count: "exact", head: true }).eq("user_id", id),
-    ]).then(([teams, requests]) => setStats({ teams: teams.count ?? 0, requests: requests.count ?? 0 }));
-  }, [id]);
+      (supabase as any).from("user_follows").select("follower_id").eq("following_id", id),
+      (supabase as any).from("user_follows").select("following_id").eq("follower_id", id),
+      (supabase as any).from("posts").select("id, content, created_at").eq("user_id", id).order("created_at", { ascending: false }).limit(10),
+      user?.id && user.id !== id
+        ? (supabase as any).from("user_follows").select("id").eq("follower_id", user.id).eq("following_id", id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]).then(async ([memberships, requests, followerRows, followingRows, postRows, followRow]) => {
+      const teamIds = [...new Set(((memberships.data as Array<{ team_id: string }>) ?? []).map((item) => item.team_id))];
+      const followerIds = [...new Set(((followerRows.data as Array<{ follower_id: string }>) ?? []).map((item) => item.follower_id))];
+      const followingIds = [...new Set(((followingRows.data as Array<{ following_id: string }>) ?? []).map((item) => item.following_id))];
+
+      const [teamRows, followerProfiles, followingProfileRows] = await Promise.all([
+        teamIds.length ? supabase.from("teams").select("id, team_name, team_purpose, project_title, leader_id").in("id", teamIds) : { data: [] },
+        followerIds.length ? supabase.from("profiles").select("*").in("id", followerIds) : { data: [] },
+        followingIds.length ? supabase.from("profiles").select("*").in("id", followingIds) : { data: [] },
+      ]);
+
+      setTeams((teamRows.data as TeamSummary[]) ?? []);
+      setFollowers((followerProfiles.data as Profile[]) ?? []);
+      setFollowingProfiles((followingProfileRows.data as Profile[]) ?? []);
+      setStats({
+        teams: teamIds.length,
+        requests: requests.count ?? 0,
+        followers: followerIds.length,
+        following: followingIds.length,
+      });
+      setPosts((postRows.data as Array<{ id: string; content: string; created_at: string }>) ?? []);
+      setIsFollowing(Boolean(followRow.data));
+    });
+  }, [id, user?.id]);
 
   if (!profile) {
     return (
@@ -50,6 +95,46 @@ function ProfileDetail() {
   }
 
   const completion = profileCompletion(profile);
+
+  const toggleFollow = async () => {
+    if (!user || user.id === id) return;
+    setFollowLoading(true);
+
+    if (isFollowing) {
+      const { error } = await (supabase as any)
+        .from("user_follows")
+        .delete()
+        .eq("follower_id", user.id)
+        .eq("following_id", id);
+      setFollowLoading(false);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      setIsFollowing(false);
+      setStats((current) => ({ ...current, followers: Math.max(0, current.followers - 1) }));
+      toast.success("Unfollowed.");
+      return;
+    }
+
+    const { error } = await (supabase as any)
+      .from("user_follows")
+      .insert({ follower_id: user.id, following_id: id });
+    setFollowLoading(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+
+    setIsFollowing(true);
+    setStats((current) => ({ ...current, followers: current.followers + 1 }));
+    await supabase.from("notifications").insert({
+      user_id: id,
+      title: "New follower",
+      message: `${user.email} started following you.`,
+    });
+    toast.success(`Following ${profile.full_name || profile.username || "user"}.`);
+  };
 
   const openMessages = async () => {
     setMessageOpen(true);
@@ -107,6 +192,18 @@ function ProfileDetail() {
 
         {user?.id !== id && (
           <div className="mt-5 flex flex-wrap justify-center gap-3">
+            <button
+              onClick={toggleFollow}
+              disabled={followLoading}
+              className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition disabled:opacity-60 ${
+                isFollowing
+                  ? "border border-cyan-300/30 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/15"
+                  : "bg-gradient-to-r from-blue-500 to-purple-500"
+              }`}
+            >
+              {isFollowing ? <UserCheck className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+              {followLoading ? "Saving..." : isFollowing ? "Following" : "Follow"}
+            </button>
             <Link to="/messages" search={{ direct: id } as never} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold">
               <MessageSquare className="h-4 w-4" />
               Open chat
@@ -118,9 +215,13 @@ function ProfileDetail() {
           </div>
         )}
 
-        <div className="mt-6 grid grid-cols-3 gap-3">
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat icon={ShieldCheck} label="Reliability" value={profile.reliability_score ?? 100} />
-          <Stat icon={Users} label="Teams" value={stats.teams} />
+          <Stat icon={Users} label="Teams" value={stats.teams} onClick={() => setListMode("teams")} />
+          <Stat icon={UserPlus} label="Followers" value={stats.followers} onClick={() => setListMode("followers")} />
+          <Stat icon={UserCheck} label="Following" value={stats.following} onClick={() => setListMode("following")} />
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3">
           <Stat icon={Trophy} label="Profile" value={completion} suffix="%" />
         </div>
       </section>
@@ -147,6 +248,22 @@ function ProfileDetail() {
           <p className="mt-2 text-sm text-white/55">
             {profile.full_name || profile.username || "This user"} has sent {stats.requests} join request{stats.requests === 1 ? "" : "s"} and is connected to {stats.teams} team{stats.teams === 1 ? "" : "s"}.
           </p>
+        </div>
+
+        <div className="mt-6">
+          <h3 className="font-semibold">Recent posts</h3>
+          <div className="mt-3 space-y-3">
+            {posts.length ? posts.map((post) => (
+              <article key={post.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <p className="whitespace-pre-wrap text-sm leading-6 text-white/70">{post.content}</p>
+                <p className="mt-3 text-xs text-white/35">{new Date(post.created_at).toLocaleString()}</p>
+              </article>
+            )) : (
+              <p className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-5 text-sm text-white/45">
+                No posts from this builder yet.
+              </p>
+            )}
+          </div>
         </div>
       </section>
 
@@ -195,6 +312,16 @@ function ProfileDetail() {
           </motion.div>
         </div>
       )}
+
+      {listMode && (
+        <SocialListModal
+          mode={listMode}
+          teams={teams}
+          followers={followers}
+          following={followingProfiles}
+          onClose={() => setListMode(null)}
+        />
+      )}
     </div>
   );
 }
@@ -211,12 +338,101 @@ function Social({ href, icon: Icon, label }: { href?: string | null; icon: typeo
   );
 }
 
-function Stat({ icon: Icon, label, value, suffix = "" }: { icon: typeof ShieldCheck; label: string; value: number; suffix?: string }) {
-  return (
-    <div className="rounded-xl bg-white/5 p-3">
+function Stat({ icon: Icon, label, value, suffix = "", onClick }: { icon: typeof ShieldCheck; label: string; value: number; suffix?: string; onClick?: () => void }) {
+  const className = `rounded-xl bg-white/5 p-3 transition ${onClick ? "hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-cyan-300/40" : ""}`;
+  const content = (
+    <>
       <Icon className="mx-auto h-4 w-4 text-cyan-300" />
       <p className="mt-2 text-lg font-bold">{value}{suffix}</p>
       <p className="text-[11px] text-white/45">{label}</p>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className={className}>
+      {content}
+    </div>
+  );
+}
+
+function SocialListModal({
+  mode,
+  teams,
+  followers,
+  following,
+  onClose,
+}: {
+  mode: SocialListMode;
+  teams: TeamSummary[];
+  followers: Profile[];
+  following: Profile[];
+  onClose: () => void;
+}) {
+  const title = mode === "teams" ? "Teams" : mode === "followers" ? "Followers" : "Following";
+  const people = mode === "followers" ? followers : following;
+
+  return (
+    <div className="fixed inset-0 z-[90] grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+      <motion.div initial={{ opacity: 0, y: 16, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="glass-strong neon-border max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-2xl p-6">
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-2xl font-bold">{title}</h2>
+          <button onClick={onClose} className="rounded-xl p-2 text-white/60 hover:bg-white/10">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="mt-5 max-h-[65vh] space-y-3 overflow-y-auto">
+          {mode === "teams" ? (
+            teams.length ? teams.map((team) => (
+              <Link
+                key={team.id}
+                to="/teams/$id"
+                params={{ id: team.id }}
+                onClick={onClose}
+                className="block rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
+              >
+                <p className="font-semibold">{team.team_name}</p>
+                <p className="mt-1 text-sm text-cyan-100/70">{team.project_title || "Project pending"}</p>
+                <p className="mt-2 text-xs text-white/45">{team.team_purpose || "Team workspace"}</p>
+              </Link>
+            )) : (
+              <p className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/50">No teams yet.</p>
+            )
+          ) : people.length ? people.map((person) => (
+            <Link
+              key={person.id}
+              to="/profiles/$id"
+              params={{ id: person.id }}
+              onClick={onClose}
+              className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
+            >
+              {person.avatar_url ? (
+                <img src={person.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
+              ) : (
+                <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
+                  {initials(person)}
+                </span>
+              )}
+              <div className="min-w-0">
+                <p className="truncate font-semibold">{person.full_name || person.username || "SyncUp user"}</p>
+                <p className="truncate text-xs text-white/50">@{person.username || "profile"} · {person.role || "Builder"}</p>
+              </div>
+            </Link>
+          )) : (
+            <p className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/50">
+              No {mode} yet.
+            </p>
+          )}
+        </div>
+      </motion.div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
+import { notifyFollowers } from "@/lib/social";
 
 export const Route = createFileRoute("/my-teams")({
   head: () => ({ meta: [{ title: "My Teams | SyncUp" }] }),
@@ -53,6 +54,42 @@ type RequestMessage = {
 
 const skillOptions = ["React", "AI/ML", "UI/UX", "Python", "Backend", "Research", "Pitching", "Product", "IoT"];
 const purposeOptions = ["Competition", "Patent / IP Rights", "Startup", "Research Paper", "Open Source", "College Project", "Other"];
+const defaultTeamForm = {
+  teamName: "",
+  teamPurpose: "Competition",
+  targetName: "",
+  targetUrl: "",
+  projectTitle: "",
+  description: "",
+  maxMembers: "4",
+};
+
+function readTeamDraft() {
+  if (typeof window === "undefined") return { form: defaultTeamForm, skills: [] as string[], customSkill: "", open: false };
+
+  try {
+    const draft = JSON.parse(window.localStorage.getItem("syncup_team_draft") ?? "{}") as {
+      form?: Partial<typeof defaultTeamForm>;
+      skills?: string[];
+      customSkill?: string;
+      open?: boolean;
+    };
+
+    const form = { ...defaultTeamForm, ...(draft.form ?? {}) };
+    const hasDraft = Object.entries(form).some(([key, value]) => value !== defaultTeamForm[key as keyof typeof defaultTeamForm])
+      || Boolean(draft.skills?.length)
+      || Boolean(draft.customSkill);
+
+    return {
+      form,
+      skills: Array.isArray(draft.skills) ? draft.skills : [],
+      customSkill: draft.customSkill ?? "",
+      open: Boolean(draft.open || hasDraft),
+    };
+  } catch {
+    return { form: defaultTeamForm, skills: [] as string[], customSkill: "", open: false };
+  }
+}
 
 function MyTeamsRoute() {
   return (
@@ -66,6 +103,7 @@ function MyTeamsRoute() {
 
 function MyTeamsPage() {
   const { user } = useAuth();
+  const teamDraft = readTeamDraft();
   const [teams, setTeams] = useState<Team[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<JoinRequest[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<JoinRequest[]>([]);
@@ -73,20 +111,12 @@ function MyTeamsPage() {
   const [requestMessages, setRequestMessages] = useState<RequestMessage[]>([]);
   const [threadText, setThreadText] = useState("");
   const [threadLoading, setThreadLoading] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(teamDraft.open);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    teamName: "",
-    teamPurpose: "Competition",
-    targetName: "",
-    targetUrl: "",
-    projectTitle: "",
-    description: "",
-    maxMembers: "4",
-  });
-  const [customSkill, setCustomSkill] = useState("");
-  const [skills, setSkills] = useState<string[]>([]);
+  const [form, setForm] = useState(teamDraft.form);
+  const [customSkill, setCustomSkill] = useState(teamDraft.customSkill);
+  const [skills, setSkills] = useState<string[]>(teamDraft.skills);
 
   const loadTeams = async () => {
     if (!user) return;
@@ -152,7 +182,11 @@ function MyTeamsPage() {
 
   useEffect(() => {
     loadTeams();
-  }, [user]);
+  }, [user?.id]);
+
+  useEffect(() => {
+    window.localStorage.setItem("syncup_team_draft", JSON.stringify({ form, skills, customSkill, open }));
+  }, [customSkill, form, open, skills]);
 
   const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const toggleSkill = (skill: string) => setSkills((current) => (current.includes(skill) ? current.filter((item) => item !== skill) : [...current, skill]));
@@ -183,7 +217,7 @@ function MyTeamsPage() {
           max_members: Number(form.maxMembers) || 4,
           required_skills: skills,
           leader_id: user.id,
-        })
+        } as never)
         .select("*")
         .single();
 
@@ -203,21 +237,19 @@ function MyTeamsPage() {
         details: `Created ${form.teamName}`,
         metadata: { team_id: team.id },
       });
+      await notifyFollowers(
+        user.id,
+        "New team from someone you follow",
+        `${form.teamName} was created. Check it out if you want to collaborate.`,
+      );
 
       toast.success("Team created successfully.");
       setTeams((current) => [team as Team, ...current]);
       setOpen(false);
-      setForm({
-        teamName: "",
-        teamPurpose: "Competition",
-        targetName: "",
-        targetUrl: "",
-        projectTitle: "",
-        description: "",
-        maxMembers: "4",
-      });
+      setForm(defaultTeamForm);
       setSkills([]);
       setCustomSkill("");
+      window.localStorage.removeItem("syncup_team_draft");
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : "Could not create team.");
     } finally {

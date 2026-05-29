@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import { Lock, Loader2 } from "lucide-react";
 import { useEffect } from "react";
@@ -7,13 +7,15 @@ import { useAuth } from "@/hooks/use-auth";
 export function ProtectedPage({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     if (!loading && !user) {
+      window.localStorage.setItem("syncup_last_route", `${location.pathname}${location.searchStr}${location.hash}`);
       const timer = window.setTimeout(() => navigate({ to: "/login" }), 900);
       return () => window.clearTimeout(timer);
     }
-  }, [loading, navigate, user]);
+  }, [loading, location.hash, location.pathname, location.searchStr, navigate, user]);
 
   if (loading) {
     return (

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SavedCompetitionsRouteImport } from './routes/saved-competitions'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as MyTeamsRouteImport } from './routes/my-teams'
 import { Route as MessagesRouteImport } from './routes/messages'
@@ -19,6 +20,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as DiscoverRouteImport } from './routes/discover'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as CommunityGuidelinesRouteImport } from './routes/community-guidelines'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as TeamsIdRouteImport } from './routes/teams.$id'
@@ -38,6 +40,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const SavedCompetitionsRoute = SavedCompetitionsRouteImport.update({
   id: '/saved-competitions',
   path: '/saved-competitions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileRoute = ProfileRouteImport.update({
@@ -75,6 +82,11 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CommunityGuidelinesRoute = CommunityGuidelinesRouteImport.update({
+  id: '/community-guidelines',
+  path: '/community-guidelines',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
@@ -104,6 +116,7 @@ const AuthCallbackRoute = AuthCallbackRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRouteWithChildren
+  '/community-guidelines': typeof CommunityGuidelinesRoute
   '/dashboard': typeof DashboardRoute
   '/discover': typeof DiscoverRoute
   '/forgot-password': typeof ForgotPasswordRoute
@@ -111,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/messages': typeof MessagesRoute
   '/my-teams': typeof MyTeamsRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/saved-competitions': typeof SavedCompetitionsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
@@ -121,6 +135,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRouteWithChildren
+  '/community-guidelines': typeof CommunityGuidelinesRoute
   '/dashboard': typeof DashboardRoute
   '/discover': typeof DiscoverRoute
   '/forgot-password': typeof ForgotPasswordRoute
@@ -128,6 +143,7 @@ export interface FileRoutesByTo {
   '/messages': typeof MessagesRoute
   '/my-teams': typeof MyTeamsRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/saved-competitions': typeof SavedCompetitionsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
@@ -139,6 +155,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/auth': typeof AuthRouteWithChildren
+  '/community-guidelines': typeof CommunityGuidelinesRoute
   '/dashboard': typeof DashboardRoute
   '/discover': typeof DiscoverRoute
   '/forgot-password': typeof ForgotPasswordRoute
@@ -146,6 +163,7 @@ export interface FileRoutesById {
   '/messages': typeof MessagesRoute
   '/my-teams': typeof MyTeamsRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/saved-competitions': typeof SavedCompetitionsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
@@ -158,6 +176,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/auth'
+    | '/community-guidelines'
     | '/dashboard'
     | '/discover'
     | '/forgot-password'
@@ -165,6 +184,7 @@ export interface FileRouteTypes {
     | '/messages'
     | '/my-teams'
     | '/profile'
+    | '/reset-password'
     | '/saved-competitions'
     | '/settings'
     | '/signup'
@@ -175,6 +195,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/auth'
+    | '/community-guidelines'
     | '/dashboard'
     | '/discover'
     | '/forgot-password'
@@ -182,6 +203,7 @@ export interface FileRouteTypes {
     | '/messages'
     | '/my-teams'
     | '/profile'
+    | '/reset-password'
     | '/saved-competitions'
     | '/settings'
     | '/signup'
@@ -192,6 +214,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/auth'
+    | '/community-guidelines'
     | '/dashboard'
     | '/discover'
     | '/forgot-password'
@@ -199,6 +222,7 @@ export interface FileRouteTypes {
     | '/messages'
     | '/my-teams'
     | '/profile'
+    | '/reset-password'
     | '/saved-competitions'
     | '/settings'
     | '/signup'
@@ -210,6 +234,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRouteWithChildren
+  CommunityGuidelinesRoute: typeof CommunityGuidelinesRoute
   DashboardRoute: typeof DashboardRoute
   DiscoverRoute: typeof DiscoverRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
@@ -217,6 +242,7 @@ export interface RootRouteChildren {
   MessagesRoute: typeof MessagesRoute
   MyTeamsRoute: typeof MyTeamsRoute
   ProfileRoute: typeof ProfileRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   SavedCompetitionsRoute: typeof SavedCompetitionsRoute
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
@@ -245,6 +271,13 @@ declare module '@tanstack/react-router' {
       path: '/saved-competitions'
       fullPath: '/saved-competitions'
       preLoaderRoute: typeof SavedCompetitionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile': {
@@ -294,6 +327,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/community-guidelines': {
+      id: '/community-guidelines'
+      path: '/community-guidelines'
+      fullPath: '/community-guidelines'
+      preLoaderRoute: typeof CommunityGuidelinesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth': {
@@ -347,6 +387,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRouteWithChildren,
+  CommunityGuidelinesRoute: CommunityGuidelinesRoute,
   DashboardRoute: DashboardRoute,
   DiscoverRoute: DiscoverRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
@@ -354,6 +395,7 @@ const rootRouteChildren: RootRouteChildren = {
   MessagesRoute: MessagesRoute,
   MyTeamsRoute: MyTeamsRoute,
   ProfileRoute: ProfileRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   SavedCompetitionsRoute: SavedCompetitionsRoute,
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,

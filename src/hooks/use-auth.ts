@@ -24,12 +24,22 @@ export function useAuth() {
         return;
       }
 
-      setState((current) => ({
-        ...current,
-        session,
-        user: session.user,
-        loading: true,
-      }));
+      let shouldLoadProfile = true;
+
+      setState((current) => {
+        const sameUser = current.user?.id === session.user.id;
+        const hasProfile = Boolean(current.profile);
+        shouldLoadProfile = !sameUser || !hasProfile;
+
+        return {
+          ...current,
+          session,
+          user: session.user,
+          loading: shouldLoadProfile,
+        };
+      });
+
+      if (!shouldLoadProfile) return;
 
       setTimeout(async () => {
         const profile = await getOrCreateProfile(session.user);

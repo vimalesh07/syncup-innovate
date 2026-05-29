@@ -1,8 +1,9 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import {
   Bell,
   Bookmark,
+  ShieldCheck,
   Search,
   LayoutDashboard,
   LogOut,
@@ -30,6 +31,7 @@ const productLinks = [
   { label: "Profile", to: "/profile", icon: User },
   { label: "My Teams", to: "/my-teams", icon: Users },
   { label: "Saved", to: "/saved-competitions", icon: Bookmark },
+  { label: "Guidelines", to: "/community-guidelines", icon: ShieldCheck },
   { label: "Settings", to: "/settings", icon: Settings },
 ];
 
@@ -46,13 +48,19 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [cookieNoticeOpen, setCookieNoticeOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("syncup_cookie_notice") !== "accepted";
+  });
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "light";
     return window.localStorage.getItem("syncup_theme") === "dark" ? "dark" : "light";
   });
   const navigate = useNavigate();
+  const location = useLocation();
   const completion = profileCompletion(profile);
   const unreadCount = notifications.filter((item) => !item.read).length;
+  const locationKey = `${location.pathname}${location.searchStr}${location.hash}`;
 
   const loadNotifications = async () => {
     if (!user) return;
@@ -76,6 +84,30 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
     document.body.dataset.theme = theme;
   }, [theme]);
 
+  useEffect(() => {
+    if (!user || typeof window === "undefined") return;
+
+    window.localStorage.setItem("syncup_last_route", locationKey);
+
+    const scrollKey = `syncup_scroll:${locationKey}`;
+    const savedY = Number(window.sessionStorage.getItem(scrollKey) ?? 0);
+    if (savedY > 0) {
+      window.setTimeout(() => window.scrollTo({ top: savedY, behavior: "instant" }), 80);
+    }
+
+    const saveScroll = () => {
+      window.sessionStorage.setItem(scrollKey, String(window.scrollY));
+    };
+
+    window.addEventListener("beforeunload", saveScroll);
+    window.addEventListener("pagehide", saveScroll);
+    return () => {
+      saveScroll();
+      window.removeEventListener("beforeunload", saveScroll);
+      window.removeEventListener("pagehide", saveScroll);
+    };
+  }, [locationKey, user]);
+
   const logout = async () => {
     await supabase.auth.signOut();
     toast.success("Logged out securely.");
@@ -91,6 +123,11 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         setNotifications((current) => current.map((item) => ({ ...item, read: true })));
       }
     }
+  };
+
+  const acceptCookieNotice = () => {
+    window.localStorage.setItem("syncup_cookie_notice", "accepted");
+    setCookieNoticeOpen(false);
   };
 
   return (
@@ -237,6 +274,41 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
             <LogOut className="h-4 w-4" />
             Logout
           </button>
+        </motion.aside>
+      )}
+
+      {cookieNoticeOpen && (
+        <motion.aside
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`fixed bottom-4 left-4 right-4 z-[90] mx-auto max-w-3xl rounded-2xl border p-4 shadow-2xl backdrop-blur-2xl ${
+            theme === "light"
+              ? "border-cyan-300/45 bg-white/95 text-[#0B0F19]"
+              : "border-cyan-300/25 bg-[#0B0F19]/90 text-white"
+          }`}
+        >
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-start gap-3">
+              <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${theme === "light" ? "bg-cyan-100 text-cyan-700" : "bg-cyan-300/15 text-cyan-100"}`}>
+                <ShieldCheck className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="font-semibold">Your data stays protected</p>
+                <p className={`mt-1 text-sm leading-6 ${theme === "light" ? "text-slate-600" : "text-white/60"}`}>
+                  SyncUp uses essential cookies/local storage for login sessions, theme, safety settings, and app preferences.
+                </p>
+                <Link
+                  to="/community-guidelines"
+                  className={`mt-2 inline-flex text-sm font-semibold ${theme === "light" ? "text-cyan-700 hover:text-cyan-600" : "text-cyan-200 hover:text-cyan-100"}`}
+                >
+                  Read community guidelines
+                </Link>
+              </div>
+            </div>
+            <button onClick={acceptCookieNotice} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-semibold text-[#0B0F19]">
+              Got it
+            </button>
+          </div>
         </motion.aside>
       )}
 

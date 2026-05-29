@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Bookmark, Loader2, MailPlus, MessageSquare, MoreVertical, Send, Trash2, Users, X } from "lucide-react";
+import { Bookmark, Loader2, MailPlus, MessageSquare, MoreVertical, Pencil, Save, Send, Trash2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
@@ -47,6 +47,9 @@ type TeamMessage = {
   profile?: Profile | null;
 };
 
+const skillOptions = ["React", "AI/ML", "UI/UX", "Python", "Backend", "Research", "Pitching", "Product", "IoT"];
+const purposeOptions = ["Competition", "Patent / IP Rights", "Startup", "Research Paper", "Open Source", "College Project", "Other"];
+
 function TeamDetailRoute() {
   return (
     <ProtectedPage>
@@ -68,6 +71,19 @@ function TeamDetail() {
   const [sendingTeamMessage, setSendingTeamMessage] = useState(false);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    teamName: "",
+    teamPurpose: "Competition",
+    targetName: "",
+    targetUrl: "",
+    projectTitle: "",
+    description: "",
+    maxMembers: "4",
+  });
+  const [editSkills, setEditSkills] = useState<string[]>([]);
+  const [customSkill, setCustomSkill] = useState("");
   const [requestOpen, setRequestOpen] = useState(false);
   const [message, setMessage] = useState("");
   const isMember = members.some((member) => member.user_id === user?.id);
@@ -137,6 +153,70 @@ function TeamDetail() {
     toast.success("Join request sent.");
     setRequestOpen(false);
     setMessage("");
+  };
+
+  const openEdit = () => {
+    if (!team || !isLeader) return;
+    setEditForm({
+      teamName: team.team_name,
+      teamPurpose: team.team_purpose || "Competition",
+      targetName: team.target_name || "",
+      targetUrl: team.target_url || "",
+      projectTitle: team.project_title || "",
+      description: team.description || "",
+      maxMembers: String(team.max_members ?? 4),
+    });
+    setEditSkills(team.required_skills ?? []);
+    setCustomSkill("");
+    setEditOpen(true);
+  };
+
+  const updateEdit = (key: keyof typeof editForm, value: string) => setEditForm((current) => ({ ...current, [key]: value }));
+  const toggleEditSkill = (skill: string) => {
+    setEditSkills((current) => (current.includes(skill) ? current.filter((item) => item !== skill) : [...current, skill]));
+  };
+  const addCustomSkill = () => {
+    const normalized = customSkill.trim();
+    if (!normalized) return;
+    if (!editSkills.some((skill) => skill.toLowerCase() === normalized.toLowerCase())) {
+      setEditSkills((current) => [...current, normalized]);
+    }
+    setCustomSkill("");
+  };
+
+  const saveTeamDetails = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!team || !isLeader) return;
+
+    setEditSaving(true);
+    const updates = {
+      team_name: editForm.teamName.trim(),
+      team_purpose: editForm.teamPurpose || null,
+      target_name: editForm.targetName.trim() || null,
+      target_url: editForm.targetUrl.trim() || null,
+      project_title: editForm.projectTitle.trim() || null,
+      description: editForm.description.trim() || null,
+      max_members: Number(editForm.maxMembers) || 4,
+      required_skills: editSkills,
+    };
+
+    const { data, error } = await supabase
+      .from("teams")
+      .update(updates as never)
+      .eq("id", team.id)
+      .eq("leader_id", user?.id ?? "")
+      .select("*")
+      .single();
+
+    setEditSaving(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+
+    setTeam(data as Team);
+    setEditOpen(false);
+    toast.success("Team details updated.");
   };
 
   const toggleSaved = async () => {
@@ -252,6 +332,12 @@ function TeamDetail() {
             <p className="mt-4 max-w-3xl text-white/60">{team.description || "No description added yet."}</p>
           </div>
           <div className="flex flex-wrap gap-3">
+            {isLeader && (
+              <button onClick={openEdit} className="flex items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-5 py-3 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/15">
+                <Pencil className="h-4 w-4" />
+                Edit team
+              </button>
+            )}
             <button onClick={toggleSaved} className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white/75 hover:bg-white/10">
               <Bookmark className={`h-4 w-4 ${saved ? "fill-current" : ""}`} />
               {saved ? "Saved" : "Save team"}
@@ -422,6 +508,121 @@ function TeamDetail() {
           </motion.form>
         </div>
       )}
+
+      {editOpen && team && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+          <motion.form
+            onSubmit={saveTeamDetails}
+            initial={{ opacity: 0, y: 18, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            className="neon-border glass-strong max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold">Edit team details</h2>
+                <p className="mt-1 text-sm text-white/55">{team.team_name}</p>
+              </div>
+              <button type="button" onClick={() => setEditOpen(false)} className="rounded-xl p-2 text-white/60 hover:bg-white/10 hover:text-white">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <Field label="Team name" value={editForm.teamName} onChange={(value) => updateEdit("teamName", value)} required />
+              <Field label="Project title" value={editForm.projectTitle} onChange={(value) => updateEdit("projectTitle", value)} />
+              <div>
+                <label className="text-xs text-white/60">Team purpose</label>
+                <select
+                  value={editForm.teamPurpose}
+                  onChange={(event) => updateEdit("teamPurpose", event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+                >
+                  {purposeOptions.map((purpose) => <option key={purpose}>{purpose}</option>)}
+                </select>
+              </div>
+              <Field label="Target name" value={editForm.targetName} onChange={(value) => updateEdit("targetName", value)} />
+              <Field label="Reference URL" value={editForm.targetUrl} onChange={(value) => updateEdit("targetUrl", value)} />
+              <Field label="Max members" type="number" value={editForm.maxMembers} onChange={(value) => updateEdit("maxMembers", value)} required />
+              <div className="md:col-span-2">
+                <label className="text-xs text-white/60">Required skills</label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {skillOptions.map((skill) => {
+                    const selected = editSkills.includes(skill);
+                    return (
+                      <button
+                        key={skill}
+                        type="button"
+                        onClick={() => toggleEditSkill(skill)}
+                        className={`rounded-full border px-3 py-2 text-xs transition ${
+                          selected ? "border-cyan-300 bg-cyan-300/15 text-cyan-100" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10"
+                        }`}
+                      >
+                        {skill}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    value={customSkill}
+                    onChange={(event) => setCustomSkill(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addCustomSkill();
+                      }
+                    }}
+                    className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+                    placeholder="Add a custom skill"
+                  />
+                  <button type="button" onClick={addCustomSkill} className="rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/15">
+                    Add skill
+                  </button>
+                </div>
+                {editSkills.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {editSkills.map((skill) => (
+                      <button
+                        type="button"
+                        key={skill}
+                        onClick={() => toggleEditSkill(skill)}
+                        className="rounded-full border border-cyan-300/40 bg-cyan-300/15 px-3 py-1.5 text-xs text-cyan-100"
+                        title="Click to remove"
+                      >
+                        {skill} x
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-white/60">Description</label>
+                <textarea
+                  value={editForm.description}
+                  onChange={(event) => updateEdit("description", event.target.value)}
+                  rows={4}
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+                  placeholder="What are you building and who do you need?"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setEditOpen(false)} className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-white/75 hover:bg-white/10">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={editSaving || !editForm.teamName.trim()}
+                className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold disabled:opacity-60"
+              >
+                {editSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save changes
+              </button>
+            </div>
+          </motion.form>
+        </div>
+      )}
     </section>
   );
 }
@@ -431,6 +632,35 @@ function Info({ label, value }: { label: string; value: string }) {
     <div className="rounded-xl bg-white/5 p-4">
       <p className="text-xs text-white/45">{label}</p>
       <p className="mt-1 font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+  required = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  required?: boolean;
+}) {
+  return (
+    <div>
+      <label className="text-xs text-white/60">{label}</label>
+      <input
+        type={type}
+        value={value}
+        required={required}
+        min={type === "number" ? 2 : undefined}
+        max={type === "number" ? 12 : undefined}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+      />
     </div>
   );
 }

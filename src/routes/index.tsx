@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { Navbar } from "@/components/landing/Navbar";
 import { Hero } from "@/components/landing/Hero";
 import { Problems } from "@/components/landing/Problems";
@@ -11,6 +12,7 @@ import { Testimonials } from "@/components/landing/Testimonials";
 import { FinalCTA } from "@/components/landing/FinalCTA";
 import { Footer } from "@/components/landing/Footer";
 import { CursorGlow } from "@/components/landing/Background";
+import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -33,6 +35,20 @@ export const Route = createFileRoute("/")({
 });
 
 function Landing() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) return;
+      const saved = window.localStorage.getItem("syncup_last_route");
+      if (saved && saved !== "/" && !saved.startsWith("/login") && !saved.startsWith("/signup")) {
+        navigate({ href: saved, replace: true });
+        return;
+      }
+      navigate({ to: "/dashboard", replace: true });
+    });
+  }, [navigate]);
+
   return (
     <main className="syncup-app relative min-h-screen overflow-x-hidden text-white">
       <CursorGlow />

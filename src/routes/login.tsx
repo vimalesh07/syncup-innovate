@@ -20,9 +20,18 @@ function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [authHelp, setAuthHelp] = useState(false);
 
+  const getSavedRoute = () => {
+    if (typeof window === "undefined") return "/dashboard";
+    const saved = window.localStorage.getItem("syncup_last_route");
+    if (!saved || saved === "/" || saved.startsWith("/login") || saved.startsWith("/signup") || saved.startsWith("/forgot-password") || saved.startsWith("/reset-password")) {
+      return "/dashboard";
+    }
+    return saved;
+  };
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate({ to: "/dashboard" });
+      if (data.session) navigate({ href: getSavedRoute(), replace: true });
     });
   }, [navigate]);
 
@@ -37,7 +46,7 @@ function LoginPage() {
         window.sessionStorage.setItem("syncup_session_mode", "session");
       }
       toast.success("Welcome back.");
-      navigate({ to: "/dashboard" });
+      navigate({ href: getSavedRoute(), replace: true });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Login failed.";
       const invalidCredentials = /invalid login credentials/i.test(message);
@@ -134,7 +143,7 @@ function LoginPage() {
             />
             Remember me
           </label>
-          <Link to="/forgot-password" className="text-cyan-300 hover:text-cyan-200">
+          <Link to="/forgot-password" search={{ email: "" }} className="text-cyan-300 hover:text-cyan-200">
             Forgot password?
           </Link>
         </div>
