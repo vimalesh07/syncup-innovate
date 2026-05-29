@@ -96,7 +96,7 @@ export function Hero() {
           className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4"
         >
           <Link
-            to="/auth"
+            to="/dashboard"
             className="group relative inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 text-white font-medium shadow-[0_0_40px_-5px_rgba(99,102,241,0.6)] hover:shadow-[0_0_60px_-5px_rgba(99,102,241,0.9)] transition-all"
           >
             Find a Team

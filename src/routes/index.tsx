@@ -34,7 +34,7 @@ export const Route = createFileRoute("/")({
 
 function Landing() {
   return (
-    <main className="relative min-h-screen bg-[#0B0F19] text-white overflow-x-hidden">
+    <main className="syncup-app relative min-h-screen overflow-x-hidden text-white">
       <CursorGlow />
       <Navbar />
       <Hero />

@@ -138,7 +138,186 @@
   .animate-pulse-ring { animation: pulse-ring 2s infinite; }
 }
 
+.syncup-app.theme-dark {
+  background: #0B0F19;
+  color: #ffffff;
+}
+
+.syncup-app.theme-light,
+html[data-theme="light"] .syncup-app {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.syncup-app.theme-light header,
+html[data-theme="light"] .syncup-app header {
+  background: rgba(255, 255, 255, 0.88) !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+.syncup-app.theme-light .grid-bg,
+html[data-theme="light"] .syncup-app .grid-bg {
+  background-image:
+    linear-gradient(rgba(15,23,42,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,23,42,0.07) 1px, transparent 1px);
+}
+
+.syncup-app.theme-light .glass,
+.syncup-app.theme-light .glass-strong,
+html[data-theme="light"] .syncup-app .glass,
+html[data-theme="light"] .syncup-app .glass-strong {
+  background: rgba(255, 255, 255, 0.88) !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+  box-shadow: 0 22px 70px rgba(15, 23, 42, 0.08);
+}
+
+.syncup-app.theme-light .text-white,
+.syncup-app.theme-light .text-white\/80,
+.syncup-app.theme-light .text-white\/75,
+.syncup-app.theme-light .text-white\/70,
+.syncup-app.theme-light .text-white\/65,
+.syncup-app.theme-light .text-white\/60,
+.syncup-app.theme-light .text-white\/55,
+.syncup-app.theme-light .text-white\/50,
+.syncup-app.theme-light .text-white\/45,
+.syncup-app.theme-light .text-white\/40,
+.syncup-app.theme-light .text-white\/35,
+html[data-theme="light"] .syncup-app .text-white,
+html[data-theme="light"] .syncup-app .text-white\/80,
+html[data-theme="light"] .syncup-app .text-white\/75,
+html[data-theme="light"] .syncup-app .text-white\/70,
+html[data-theme="light"] .syncup-app .text-white\/65,
+html[data-theme="light"] .syncup-app .text-white\/60,
+html[data-theme="light"] .syncup-app .text-white\/55,
+html[data-theme="light"] .syncup-app .text-white\/50,
+html[data-theme="light"] .syncup-app .text-white\/45,
+html[data-theme="light"] .syncup-app .text-white\/40,
+html[data-theme="light"] .syncup-app .text-white\/35 {
+  color: #0f172a !important;
+}
+
+.syncup-app.theme-light .text-cyan-100,
+.syncup-app.theme-light .text-cyan-100\/70,
+.syncup-app.theme-light .text-cyan-100\/75,
+.syncup-app.theme-light .text-cyan-100\/80,
+.syncup-app.theme-light .text-cyan-200,
+.syncup-app.theme-light .text-cyan-300,
+html[data-theme="light"] .syncup-app .text-cyan-100,
+html[data-theme="light"] .syncup-app .text-cyan-100\/70,
+html[data-theme="light"] .syncup-app .text-cyan-100\/75,
+html[data-theme="light"] .syncup-app .text-cyan-100\/80,
+html[data-theme="light"] .syncup-app .text-cyan-200,
+html[data-theme="light"] .syncup-app .text-cyan-300 {
+  color: #0f172a !important;
+}
+
+.syncup-app.theme-light .text-gradient,
+html[data-theme="light"] .syncup-app .text-gradient {
+  background-image: linear-gradient(135deg, #0f172a, #111827) !important;
+}
+
+.syncup-app.theme-light .bg-cyan-300\/10,
+.syncup-app.theme-light .bg-cyan-300\/15,
+.syncup-app.theme-light .bg-cyan-300\/20,
+.syncup-app.theme-light .bg-cyan-400,
+html[data-theme="light"] .syncup-app .bg-cyan-300\/10,
+html[data-theme="light"] .syncup-app .bg-cyan-300\/15,
+html[data-theme="light"] .syncup-app .bg-cyan-300\/20,
+html[data-theme="light"] .syncup-app .bg-cyan-400 {
+  background-color: rgba(15, 23, 42, 0.1) !important;
+}
+
+.syncup-app.theme-light .text-red-100,
+.syncup-app.theme-light .text-red-200 {
+  color: #991b1b !important;
+}
+
+.syncup-app.theme-light .bg-white\/5,
+.syncup-app.theme-light .bg-white\/8,
+.syncup-app.theme-light .bg-white\/10,
+html[data-theme="light"] .syncup-app .bg-white\/5,
+html[data-theme="light"] .syncup-app .bg-white\/8,
+html[data-theme="light"] .syncup-app .bg-white\/10 {
+  background-color: rgba(15, 23, 42, 0.055) !important;
+}
+
+.syncup-app.theme-light .border-white\/10,
+.syncup-app.theme-light .border-white\/15,
+html[data-theme="light"] .syncup-app .border-white\/10,
+html[data-theme="light"] .syncup-app .border-white\/15 {
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+.syncup-app.theme-light input,
+.syncup-app.theme-light textarea,
+.syncup-app.theme-light select,
+html[data-theme="light"] .syncup-app input,
+html[data-theme="light"] .syncup-app textarea,
+html[data-theme="light"] .syncup-app select {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.16) !important;
+}
+
+.syncup-app.theme-light input::placeholder,
+.syncup-app.theme-light textarea::placeholder {
+  color: rgba(15, 23, 42, 0.45) !important;
+}
+
+.syncup-app.theme-light .theme-control,
+html[data-theme="light"] .syncup-app .theme-control {
+  background: #0f172a !important;
+  color: #ffffff !important;
+  border-color: #0f172a !important;
+}
+
+.syncup-app.theme-light [class*="bg-gradient-to"].text-white,
+.syncup-app.theme-light a[class*="bg-gradient-to"],
+.syncup-app.theme-light button[class*="bg-gradient-to"],
+.syncup-app.theme-light span[class*="bg-gradient-to"],
+html[data-theme="light"] .syncup-app [class*="bg-gradient-to"].text-white,
+html[data-theme="light"] .syncup-app a[class*="bg-gradient-to"],
+html[data-theme="light"] .syncup-app button[class*="bg-gradient-to"],
+html[data-theme="light"] .syncup-app span[class*="bg-gradient-to"] {
+  color: #ffffff !important;
+}
+
+.syncup-app.theme-light [class*="bg-gradient-to"] .text-white,
+.syncup-app.theme-light [class*="bg-gradient-to"] svg,
+html[data-theme="light"] .syncup-app [class*="bg-gradient-to"] .text-white,
+html[data-theme="light"] .syncup-app [class*="bg-gradient-to"] svg {
+  color: #ffffff !important;
+}
+
+.syncup-app.theme-light .text-gradient,
+html[data-theme="light"] .syncup-app .text-gradient {
+  color: transparent !important;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #0B0F19; }
 ::-webkit-scrollbar-thumb { background: linear-gradient(#3b82f6, #a78bfa); border-radius: 8px; }
+
+html[data-theme="light"] {
+  background: #f8fafc;
+  scrollbar-color: #0f172a #f8fafc;
+}
+
+html[data-theme="dark"] {
+  background: #0B0F19;
+  scrollbar-color: #3b82f6 #0B0F19;
+}
+
+html[data-theme="light"] body {
+  background: #f8fafc;
+}
+
+html[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #0f172a;
+  border: 2px solid #f8fafc;
+}

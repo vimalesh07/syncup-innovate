@@ -99,6 +99,12 @@ function RootShell({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var t=localStorage.getItem('syncup_theme')||'light';document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t;}catch(e){}",
+          }}
+        />
         <HeadContent />
       </head>
       <body>
@@ -116,7 +122,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
-      <Toaster theme="dark" position="top-right" richColors />
+      <Toaster theme="system" position="top-right" richColors />
     </QueryClientProvider>
   );
 }

@@ -34,14 +34,14 @@ export function FinalCTA() {
 
           <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
             <Link
-              to="/auth"
+              to="/signup"
               className="group inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 text-white font-semibold shadow-[0_0_60px_-10px_rgba(99,102,241,0.7)] hover:shadow-[0_0_80px_-10px_rgba(99,102,241,1)] transition-all"
             >
               Join SyncUp
               <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition" />
             </Link>
             <Link
-              to="/auth"
+              to="/dashboard"
               className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl glass-strong text-white font-semibold hover:bg-white/10 transition-all"
             >
               Start Building
