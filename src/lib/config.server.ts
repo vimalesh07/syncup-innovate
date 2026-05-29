@@ -14,7 +14,6 @@ import process from "node:process";
 //     not reused elsewhere.
 //   - import.meta.env.VITE_FOO: PUBLIC config readable from both client
 //     and server (analytics IDs, public URLs). Define in .env with the
-//     VITE_ prefix. Never put secrets here — they ship to the browser.
 
 export function getServerConfig() {
   return {
