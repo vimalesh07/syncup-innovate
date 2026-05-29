@@ -46,9 +46,32 @@ function ProfilePage() {
   const [listMode, setListMode] = useState<SocialListMode | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const DRAFT_KEY = `profile_draft_${user?.id}`;
+
+  // Load draft from localStorage or sync with profile
   useEffect(() => {
-    if (profile) setForm(profile);
-  }, [profile]);
+    if (profile) {
+      const draft = localStorage.getItem(DRAFT_KEY);
+      if (draft) {
+        try {
+          const draftData = JSON.parse(draft);
+          setForm(draftData);
+        } catch {
+          setForm(profile);
+        }
+      } else {
+        setForm(profile);
+      }
+    }
+  }, [profile, DRAFT_KEY]);
+
+  // Auto-save form to localStorage on change
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(form));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [form, DRAFT_KEY]);
 
   useEffect(() => {
     if (!user) return;
@@ -121,6 +144,7 @@ function ProfilePage() {
       toast.error(error.message);
       return;
     }
+    localStorage.removeItem(DRAFT_KEY);
     toast.success("Profile updated.");
   };
 
