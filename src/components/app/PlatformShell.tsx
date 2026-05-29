@@ -277,83 +277,89 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
       </header>
 
       {notificationOpen && (
-        <motion.aside
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="fixed right-4 top-20 z-50 w-[calc(100%-2rem)] max-w-md rounded-2xl glass-strong p-3 shadow-2xl md:right-40"
-        >
-          <div className="flex items-center justify-between px-2 py-2">
-            <div>
-              <p className="text-sm font-semibold">Notifications</p>
-              <p className="text-xs text-white/50">Join requests and team updates</p>
+        <>
+          <button className="fixed inset-0 z-40 bg-black/20 md:hidden" aria-label="Close notifications" onClick={() => setNotificationOpen(false)} />
+          <motion.aside
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="platform-popover fixed right-4 top-20 z-50 w-[calc(100%-2rem)] max-w-md rounded-2xl p-3 shadow-2xl md:right-40"
+          >
+            <div className="flex items-center justify-between px-2 py-2">
+              <div>
+                <p className="text-sm font-semibold">Notifications</p>
+                <p className="text-xs text-white/50">Join requests and team updates</p>
+              </div>
+              <button onClick={() => setNotificationOpen(false)} className="rounded-lg p-2 hover:bg-white/10">
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            <button onClick={() => setNotificationOpen(false)} className="rounded-lg p-2 hover:bg-white/10">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="my-2 h-px bg-white/10" />
-          <div className="max-h-80 space-y-2 overflow-y-auto">
-            {notifications.length ? notifications.map((item) => (
-              <Link
-                key={item.id}
-                to="/my-teams"
-                onClick={() => setNotificationOpen(false)}
-                className="block rounded-xl bg-white/5 p-3 transition hover:bg-white/10"
-              >
-                <p className="text-sm font-semibold">{item.title}</p>
-                {item.message && <p className="mt-1 text-xs text-white/55">{item.message}</p>}
-                <p className="mt-2 text-[11px] text-white/35">{new Date(item.created_at).toLocaleString()}</p>
-              </Link>
-            )) : (
-              <p className="rounded-xl bg-white/5 p-4 text-center text-sm text-white/50">No notifications yet.</p>
-            )}
-          </div>
-        </motion.aside>
+            <div className="my-2 h-px bg-white/10" />
+            <div className="max-h-80 space-y-2 overflow-y-auto">
+              {notifications.length ? notifications.map((item) => (
+                <Link
+                  key={item.id}
+                  to="/my-teams"
+                  onClick={() => setNotificationOpen(false)}
+                  className="block rounded-xl bg-white/5 p-3 transition hover:bg-white/10"
+                >
+                  <p className="text-sm font-semibold">{item.title}</p>
+                  {item.message && <p className="mt-1 text-xs text-white/55">{item.message}</p>}
+                  <p className="mt-2 text-[11px] text-white/35">{new Date(item.created_at).toLocaleString()}</p>
+                </Link>
+              )) : (
+                <p className="rounded-xl bg-white/5 p-4 text-center text-sm text-white/50">No notifications yet.</p>
+              )}
+            </div>
+          </motion.aside>
+        </>
       )}
 
       {open && (
-        <motion.aside
-          initial={{ opacity: 0, x: 24 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="fixed right-4 top-20 z-50 w-[calc(100%-2rem)] max-w-sm rounded-2xl glass-strong p-3 shadow-2xl md:right-8"
-        >
-          <div className="flex items-center justify-between px-2 py-2">
-            <div>
-              <p className="text-sm font-semibold">{profile?.full_name || profile?.username || "SyncUp user"}</p>
-              <p className="text-xs text-white/50">{user?.email}</p>
-            </div>
-            <button onClick={() => setOpen(false)} className="rounded-lg p-2 hover:bg-white/10">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="my-2 h-px bg-white/10" />
-          {productLinks.map((link) => {
-            const Icon = link.icon;
-            return (
-              <Link
-                key={link.to}
-                to={link.to}
-                onClick={() => setOpen(false)}
-                className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/75 transition hover:bg-white/10 hover:text-white"
-              >
-                <Icon className="h-4 w-4 text-cyan-300" />
-                {link.label}
-                {link.to === "/messages" && messageUnreadCount > 0 && (
-                  <span className="ml-auto grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19]">
-                    {messageUnreadCount}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-          <button
-            onClick={logout}
-            className="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-red-200 transition hover:bg-red-500/10"
+        <>
+          <button className="fixed inset-0 z-40 bg-black/20 md:hidden" aria-label="Close menu" onClick={() => setOpen(false)} />
+          <motion.aside
+            initial={{ opacity: 0, x: 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="platform-popover fixed right-4 top-20 z-50 w-[calc(100%-2rem)] max-w-sm rounded-2xl p-3 shadow-2xl md:right-8"
           >
-            <LogOut className="h-4 w-4" />
-            Logout
-          </button>
-        </motion.aside>
+            <div className="flex items-center justify-between px-2 py-2">
+              <div>
+                <p className="text-sm font-semibold">{profile?.full_name || profile?.username || "SyncUp user"}</p>
+                <p className="text-xs text-white/50">{user?.email}</p>
+              </div>
+              <button onClick={() => setOpen(false)} className="rounded-lg p-2 hover:bg-white/10">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="my-2 h-px bg-white/10" />
+            {productLinks.map((link) => {
+              const Icon = link.icon;
+              return (
+                <Link
+                  key={link.to}
+                  to={link.to}
+                  onClick={() => setOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/75 transition hover:bg-white/10 hover:text-white"
+                >
+                  <Icon className="h-4 w-4 text-cyan-300" />
+                  {link.label}
+                  {link.to === "/messages" && messageUnreadCount > 0 && (
+                    <span className="ml-auto grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19]">
+                      {messageUnreadCount}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+            <button
+              onClick={logout}
+              className="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-red-200 transition hover:bg-red-500/10"
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </button>
+          </motion.aside>
+        </>
       )}
 
       {cookieNoticeOpen && (

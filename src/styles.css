@@ -151,8 +151,10 @@ html[data-theme="light"] .syncup-app {
 
 .syncup-app.theme-light header,
 html[data-theme="light"] .syncup-app header {
-  background: rgba(255, 255, 255, 0.88) !important;
+  background: #ffffff !important;
   border-color: rgba(15, 23, 42, 0.12) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .syncup-app.theme-light .grid-bg,
@@ -166,9 +168,25 @@ html[data-theme="light"] .syncup-app .grid-bg {
 .syncup-app.theme-light .glass-strong,
 html[data-theme="light"] .syncup-app .glass,
 html[data-theme="light"] .syncup-app .glass-strong {
-  background: rgba(255, 255, 255, 0.88) !important;
+  background: #ffffff !important;
   border-color: rgba(15, 23, 42, 0.12) !important;
   box-shadow: 0 22px 70px rgba(15, 23, 42, 0.08);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.platform-popover {
+  background: #0B0F19;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.syncup-app.theme-light .platform-popover,
+html[data-theme="light"] .syncup-app .platform-popover {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.18) !important;
 }
 
 .syncup-app.theme-light .text-white,
@@ -230,6 +248,39 @@ html[data-theme="light"] .syncup-app .bg-cyan-400 {
 .syncup-app.theme-light .text-red-100,
 .syncup-app.theme-light .text-red-200 {
   color: #991b1b !important;
+}
+
+.syncup-app.theme-light .text-emerald-100,
+.syncup-app.theme-light .text-emerald-200,
+html[data-theme="light"] .syncup-app .text-emerald-100,
+html[data-theme="light"] .syncup-app .text-emerald-200 {
+  color: #166534 !important;
+}
+
+.syncup-app.theme-light .text-yellow-100,
+.syncup-app.theme-light .text-yellow-200,
+html[data-theme="light"] .syncup-app .text-yellow-100,
+html[data-theme="light"] .syncup-app .text-yellow-200 {
+  color: #854d0e !important;
+}
+
+.syncup-app.theme-light .bg-emerald-300\/15,
+.syncup-app.theme-light .bg-emerald-400\/15,
+html[data-theme="light"] .syncup-app .bg-emerald-300\/15,
+html[data-theme="light"] .syncup-app .bg-emerald-400\/15 {
+  background-color: #dcfce7 !important;
+}
+
+.syncup-app.theme-light .bg-emerald-400\/20,
+html[data-theme="light"] .syncup-app .bg-emerald-400\/20,
+.syncup-app.theme-light .bg-emerald-400\/15:hover,
+html[data-theme="light"] .syncup-app .bg-emerald-400\/15:hover {
+  background-color: #bbf7d0 !important;
+}
+
+.syncup-app.theme-light .bg-yellow-300\/15,
+html[data-theme="light"] .syncup-app .bg-yellow-300\/15 {
+  background-color: #fef3c7 !important;
 }
 
 .syncup-app.theme-light .bg-white\/5,
@@ -322,9 +373,11 @@ html[data-theme="light"] .syncup-app .message-reaction,
 html[data-theme="light"] .syncup-app .message-composer,
 html[data-theme="light"] .syncup-app .message-profile-drawer,
 html[data-theme="light"] .syncup-app .message-mobile-sheet {
-  background-color: rgba(255, 255, 255, 0.94) !important;
+  background-color: #ffffff !important;
   color: #0f172a !important;
   border-color: rgba(15, 23, 42, 0.14) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .syncup-app.theme-light .message-action-button:hover,
