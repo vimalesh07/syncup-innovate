@@ -13,7 +13,6 @@ import {
   Loader2,
   MessageSquare,
   MoreVertical,
-  Paperclip,
   Pin,
   Reply,
   Search,
@@ -21,6 +20,8 @@ import {
   SmilePlus,
   Trash2,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +40,7 @@ export const Route = createFileRoute("/messages")({
 const reactions = ["👍", "❤️", "🔥", "😂", "😮", "😢"];
 
 type MessageKind = "direct" | "request";
+type InboxFilter = "all" | "direct" | "requests" | "unread";
 
 type MessageRow = {
   id: string;
@@ -74,6 +76,7 @@ type Team = {
   id: string;
   team_name: string;
   leader_id: string;
+  required_skills?: string[] | null;
 };
 
 type Presence = {
@@ -101,6 +104,12 @@ type Thread = {
   updatedAt: string;
   messages: MessageRow[];
   unreadCount: number;
+  requestStatus?: string;
+  requestMessage?: string | null;
+  requestUserId?: string;
+  teamLeaderId?: string;
+  teamName?: string;
+  requestSkills?: string[] | null;
 };
 
 type AttachmentDraft = {
@@ -131,6 +140,7 @@ function MessagesPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<InboxFilter>("all");
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<MessageRow | null>(null);
   const [editing, setEditing] = useState<MessageRow | null>(null);
@@ -139,6 +149,10 @@ function MessagesPage() {
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [dragging, setDragging] = useState(false);
   const [showJump, setShowJump] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem("syncup_mute_all_notifications") !== "true";
+  });
   const messageRefs = useRef(new Map<string, HTMLDivElement>());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const typingTimerRef = useRef<number | null>(null);
@@ -152,14 +166,20 @@ function MessagesPage() {
     const now = Date.now();
     return threads
       .filter((thread) => {
+        if (filter === "direct" && thread.type !== "direct") return false;
+        if (filter === "requests" && thread.type !== "request") return false;
+        if (filter === "unread" && thread.unreadCount === 0) return false;
         if (!query.trim()) return true;
         const needle = query.toLowerCase();
         return [
           thread.title,
           thread.subtitle,
+          thread.type === "direct" ? "direct" : "team request",
+          thread.requestStatus,
+          thread.teamName,
           new Date(thread.updatedAt).toLocaleDateString(),
           ...thread.messages.map((message) => `${message.message} ${new Date(message.created_at).toLocaleDateString()}`),
-        ].some((value) => value.toLowerCase().includes(needle));
+        ].filter(Boolean).some((value) => `${value}`.toLowerCase().includes(needle));
       })
       .sort((a, b) => {
         const aTyping = typingRows.some((row) => row.thread_id === a.id && row.user_id !== user?.id && +new Date(row.expires_at) > now);
@@ -168,7 +188,7 @@ function MessagesPage() {
         if (Number(aTyping) !== Number(bTyping)) return Number(bTyping) - Number(aTyping);
         return +new Date(b.updatedAt) - +new Date(a.updatedAt);
       });
-  }, [threads, query, typingRows, user?.id]);
+  }, [threads, query, filter, typingRows, user?.id]);
 
   const pinnedMessages = useMemo(() => selected?.messages.filter((message) => (message.pinned_by ?? []).length) ?? [], [selected]);
   const selectedTyping = useMemo(() => {
@@ -211,7 +231,7 @@ function MessagesPage() {
       : { data: [] };
 
     const allTeamIds = [...new Set([...leaderTeamIds, ...requests.map((request) => request.team_id)])];
-    const teamsResult = allTeamIds.length ? await supabase.from("teams").select("id, team_name, leader_id").in("id", allTeamIds) : { data: [] };
+    const teamsResult = allTeamIds.length ? await supabase.from("teams").select("id, team_name, leader_id, required_skills").in("id", allTeamIds) : { data: [] };
     const teamMap = new Map([...(teamsResult.data as Team[] ?? []), ...leaderTeams].map((team) => [team.id, team]));
 
     const localReactions = readLocalReactionFallback(user.id);
@@ -302,6 +322,12 @@ function MessagesPage() {
         updatedAt: last?.created_at ?? request.created_at,
         messages: visibleMessages,
         unreadCount: visibleMessages.filter((message) => isUnread(message, user.id)).length,
+        requestStatus: request.status,
+        requestMessage: request.message,
+        requestUserId: request.user_id,
+        teamLeaderId: team?.leader_id,
+        teamName: team?.team_name,
+        requestSkills: team?.required_skills ?? null,
       };
     });
 
@@ -558,6 +584,39 @@ function MessagesPage() {
     await loadThreads({ silent: true });
   };
 
+  const decideRequest = async (status: "accepted" | "rejected") => {
+    if (!user || !selected || selected.type !== "request" || !selected.requestId || selected.teamLeaderId !== user.id || selected.requestStatus !== "pending") return;
+
+    try {
+      if (status === "accepted" && selected.teamId && selected.requestUserId) {
+        const { error: memberError } = await supabase.from("team_members").upsert({
+          team_id: selected.teamId,
+          user_id: selected.requestUserId,
+          role: "member",
+        } as never, { onConflict: "team_id,user_id" });
+        if (memberError) throw memberError;
+      }
+
+      const { error } = await supabase.from("join_requests").update({ status }).eq("id", selected.requestId);
+      if (error) throw error;
+
+      if (selected.requestUserId) {
+        await supabase.from("notifications").insert({
+          user_id: selected.requestUserId,
+          title: status === "accepted" ? "Join request accepted" : "Join request rejected",
+          message: `${selected.teamName || selected.title} ${status === "accepted" ? "accepted" : "rejected"} your request.`,
+        });
+      }
+
+      setThreads((current) => current.map((thread) => thread.id === selected.id ? { ...thread, requestStatus: status, subtitle: `${status} request` } : thread));
+      toast.success(status === "accepted" ? "Request accepted." : "Request rejected.");
+      await loadThreads({ silent: true });
+      setSelectedId(selected.id);
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Could not update request.");
+    }
+  };
+
   const toggleReaction = async (message: MessageRow, reaction: string) => {
     if (!user || !selected || message.id.endsWith("-initial")) return;
     const next = normalizeReactions(message.reactions);
@@ -669,10 +728,22 @@ function MessagesPage() {
 
   const activeSubmit = editing ? saveEdit : sendMessage;
   const unreadTotal = threads.reduce((sum, thread) => sum + thread.unreadCount, 0);
+  const filterCounts = {
+    all: threads.length,
+    direct: threads.filter((thread) => thread.type === "direct").length,
+    requests: threads.filter((thread) => thread.type === "request").length,
+    unread: unreadTotal,
+  };
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    window.localStorage.setItem("syncup_mute_all_notifications", next ? "false" : "true");
+    toast.success(next ? "Message sounds on." : "Message sounds off.");
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const media = window.matchMedia("(max-width: 1279px)");
+    const media = window.matchMedia("(max-width: 1023px)");
     const syncLayout = () => {
       setCompactChat(media.matches);
       if (!media.matches) setChatOpen(false);
@@ -685,7 +756,7 @@ function MessagesPage() {
   return (
     <section className="space-y-6">
       <div className="glass-strong neon-border rounded-2xl p-5">
-        <div>
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
           <div>
             <h1 className="flex items-center gap-3 text-3xl font-bold">
               <MessageSquare className="h-7 w-7 text-cyan-300" />
@@ -694,6 +765,15 @@ function MessagesPage() {
             </h1>
             <p className="mt-2 text-white/55">Direct messages and team request conversations.</p>
           </div>
+          <button
+            onClick={toggleSound}
+            className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${
+              soundEnabled ? "border-cyan-300/30 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10"
+            }`}
+          >
+            {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            Sound {soundEnabled ? "on" : "off"}
+          </button>
         </div>
       </div>
 
@@ -705,8 +785,24 @@ function MessagesPage() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-cyan-300"
-              placeholder="Search people, messages, dates..."
+              placeholder="Search people, messages, teams, requests..."
             />
+          </div>
+          <div className="mb-4 grid grid-cols-4 gap-1 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px] font-semibold sm:text-xs">
+            {([
+              ["all", "All"],
+              ["direct", "Direct"],
+              ["requests", "Requests"],
+              ["unread", "Unread"],
+            ] as Array<[InboxFilter, string]>).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setFilter(key)}
+                className={`rounded-lg px-2 py-2 transition ${filter === key ? "bg-cyan-300 text-[#0B0F19]" : "text-white/55 hover:bg-white/10 hover:text-white"}`}
+              >
+                {label}{filterCounts[key] ? ` ${filterCounts[key]}` : ""}
+              </button>
+            ))}
           </div>
 
           {loading ? (
@@ -729,11 +825,11 @@ function MessagesPage() {
               ))}
             </div>
           ) : (
-            <EmptyInbox />
+            <EmptyInbox filter={filter} query={query} />
           )}
         </aside>
 
-        <section className="glass-strong hidden min-w-0 overflow-hidden rounded-2xl xl:flex">
+        <section className="glass-strong hidden min-w-0 overflow-hidden rounded-2xl lg:flex">
           {selected ? (
             <Conversation
               selected={selected}
@@ -764,6 +860,8 @@ function MessagesPage() {
               onPinnedToggle={() => setPinnedOpen(!pinnedOpen)}
               onMute={() => toggleThreadSet(muteKey, selected.id, muted.has(selected.id) ? "Conversation unmuted." : "Conversation muted.")}
               onDeleteConversation={deleteConversationForMe}
+              onAcceptRequest={() => decideRequest("accepted")}
+              onRejectRequest={() => decideRequest("rejected")}
               onBack={undefined}
               onScroll={() => {
                 const el = scrollRef.current;
@@ -799,7 +897,7 @@ function MessagesPage() {
       </div>
 
       {compactChat && chatOpen && selected && (
-        <div className="message-mobile-sheet fixed inset-x-0 bottom-0 top-16 z-[45] overflow-hidden xl:hidden">
+        <div className="message-mobile-sheet fixed inset-x-0 bottom-0 top-16 z-[45] overflow-hidden lg:hidden">
           <Conversation
             selected={selected}
             userId={user?.id}
@@ -829,6 +927,8 @@ function MessagesPage() {
             onPinnedToggle={() => setPinnedOpen(!pinnedOpen)}
             onMute={() => toggleThreadSet(muteKey, selected.id, muted.has(selected.id) ? "Conversation unmuted." : "Conversation muted.")}
             onDeleteConversation={deleteConversationForMe}
+            onAcceptRequest={() => decideRequest("accepted")}
+            onRejectRequest={() => decideRequest("rejected")}
             onBack={() => setChatOpen(false)}
             onScroll={() => {
               const el = scrollRef.current;
@@ -897,6 +997,8 @@ function Conversation({
   onPinnedToggle,
   onMute,
   onDeleteConversation,
+  onAcceptRequest,
+  onRejectRequest,
   onBack,
   onScroll,
   onScrollBottom,
@@ -939,6 +1041,8 @@ function Conversation({
   onPinnedToggle: () => void;
   onMute: () => void;
   onDeleteConversation: () => void;
+  onAcceptRequest: () => void;
+  onRejectRequest: () => void;
   onBack?: () => void;
   onScroll: () => void;
   onScrollBottom: () => void;
@@ -956,6 +1060,10 @@ function Conversation({
   onRemoveAttachment: (index: number) => void;
   onDrag: (value: boolean) => void;
 }) {
+  const otherProfile = selected.profileId ? profiles.get(selected.profileId) : undefined;
+  const requestStatus = selected.requestStatus ?? "pending";
+  const canDecideRequest = selected.type === "request" && requestStatus === "pending" && selected.teamLeaderId === userId;
+
   return (
     <div
       className={`relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden ${dragging ? "ring-2 ring-cyan-300/70" : ""}`}
@@ -967,7 +1075,7 @@ function Conversation({
       onDrop={(event) => {
         event.preventDefault();
         onDrag(false);
-        onAttach(event.dataTransfer.files);
+        toast.info("Attachments are not enabled for this workspace yet.");
       }}
     >
       <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/10 p-3 sm:gap-3 sm:p-4">
@@ -977,10 +1085,18 @@ function Conversation({
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
-          <AvatarButton thread={selected} profile={selected.profileId ? profiles.get(selected.profileId) : undefined} onOpen={onProfileOpen} />
+          <AvatarButton thread={selected} profile={otherProfile} onOpen={onProfileOpen} />
           <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold sm:text-xl">{selected.title}</h2>
-            <PresenceLine presence={presence} typing={selectedTyping} />
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="truncate text-base font-semibold sm:text-xl">{selected.title}</h2>
+              {selected.type === "request" && <StatusBadge status={requestStatus} />}
+            </div>
+            <p className="truncate text-xs text-white/45">
+              {selected.type === "request"
+                ? `${otherProfile?.full_name || otherProfile?.username || "Applicant"} - ${selected.teamName || "Team request"}`
+                : otherProfile?.role || otherProfile?.college || "Direct message"}
+            </p>
+            {selected.type === "direct" && <PresenceLine presence={presence} typing={selectedTyping} />}
           </div>
         </div>
         <div className="flex shrink-0 gap-1.5 sm:gap-2">
@@ -995,6 +1111,40 @@ function Conversation({
           </button>
         </div>
       </div>
+
+      {selected.type === "request" && (
+        <div className="border-b border-white/10 bg-cyan-300/5 p-3 sm:p-4">
+          <div className="flex flex-col gap-3 rounded-2xl border border-cyan-300/15 bg-white/[0.03] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-semibold">Team join request</p>
+                <StatusBadge status={requestStatus} />
+              </div>
+              <p className="mt-1 text-sm text-white/55">
+                {otherProfile?.full_name || otherProfile?.username || "Applicant"} requested to join {selected.teamName || selected.title}.
+              </p>
+              {selected.requestMessage && <p className="mt-2 line-clamp-2 text-sm text-white/65">"{selected.requestMessage}"</p>}
+              {(selected.requestSkills ?? []).length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {selected.requestSkills?.slice(0, 5).map((skill) => (
+                    <span key={skill} className="rounded-full bg-cyan-300/15 px-2.5 py-1 text-[11px] font-semibold text-cyan-100">{skill}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {canDecideRequest && (
+              <div className="flex shrink-0 gap-2">
+                <button onClick={onRejectRequest} className="rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/15">
+                  Reject
+                </button>
+                <button onClick={onAcceptRequest} className="rounded-xl bg-cyan-300 px-4 py-2 text-sm font-semibold text-[#0B0F19] hover:bg-cyan-200">
+                  Accept
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {pinnedOpen && (
         <div className="border-b border-white/10 bg-white/[0.03] p-3">
@@ -1089,6 +1239,7 @@ function MessageBubble(props: {
   onMenu: (id: string | null) => void;
 }) {
   const { message, own, grouped, profile, thread, query, reply, openMenu } = props;
+  const deleted = Boolean(message.deleted_for_everyone);
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={`group flex items-end gap-2 ${own ? "justify-end" : "justify-start"} ${grouped ? "mt-1" : "mt-3"}`}>
       {!own && !grouped ? (
@@ -1112,24 +1263,28 @@ function MessageBubble(props: {
               Replying to: {reply.message || attachmentSubtitle(reply)}
             </button>
           )}
-          {message.message && <p className="whitespace-pre-wrap break-words pr-6 [overflow-wrap:anywhere] sm:pr-0">{highlight(message.message, query)}</p>}
-          <Attachments message={message} />
+          {deleted ? (
+            <p className="italic text-white/45">This message was deleted</p>
+          ) : message.message && (
+            <p className="whitespace-pre-wrap break-words pr-6 [overflow-wrap:anywhere] sm:pr-0">{highlight(message.message, query)}</p>
+          )}
+          {!deleted && <Attachments message={message} />}
           <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-white/35">
             {message.edited_at && <span>edited</span>}
             <span>{smartTime(message.created_at)}</span>
             {own && <ReadReceipt message={message} />}
           </div>
         </div>
-        <ReactionCounts message={message} onReaction={(reaction) => props.onReaction(message, reaction)} />
-        <div className={`absolute top-0 hidden gap-1 sm:group-hover:flex ${own ? "right-full mr-2" : "left-full ml-2"}`}>
+        {!deleted && <ReactionCounts message={message} onReaction={(reaction) => props.onReaction(message, reaction)} />}
+        {!deleted && <div className={`absolute top-0 hidden gap-1 sm:group-hover:flex ${own ? "right-full mr-2" : "left-full ml-2"}`}>
           <IconButton title="Reply" icon={Reply} onClick={() => props.onReply(message)} />
           <IconButton title="React" icon={SmilePlus} onClick={() => props.onMenu(openMenu ? null : message.id)} />
           <IconButton title="Copy" icon={Copy} onClick={() => props.onCopy(message)} />
           <IconButton title={(message.pinned_by ?? []).length ? "Unpin" : "Pin"} icon={Pin} onClick={() => props.onPin(message)} />
           {own && <IconButton title="Edit" icon={Edit3} onClick={() => props.onEdit(message)} />}
           <IconButton title="More" icon={MoreVertical} onClick={() => props.onMenu(openMenu ? null : message.id)} />
-        </div>
-        {openMenu && (
+        </div>}
+        {!deleted && openMenu && (
           <div className={`message-action-menu absolute top-9 z-20 w-56 rounded-xl border border-white/10 p-2 shadow-2xl ${own ? "right-0" : "left-0"}`}>
             <div className="mb-2 flex gap-1 px-1">
               {reactions.map((reaction) => (
@@ -1184,15 +1339,21 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
           ))}
         </div>
       )}
-      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-        <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 sm:h-12 sm:w-12">
-          <Paperclip className="h-5 w-5" />
-          <input type="file" multiple className="hidden" onChange={(event) => event.target.files && onAttach(event.target.files)} />
-        </label>
-        <input
+      <div className="flex min-w-0 items-end gap-2 sm:gap-3">
+        <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/5 text-white/45 hover:bg-white/10" title="Emoji reactions are available from message menus">
+          <SmilePlus className="h-5 w-5" />
+        </button>
+        <textarea
           value={text}
           onChange={(event) => onTextChange(event.target.value)}
-          className="min-h-11 min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none transition focus:border-cyan-300 sm:min-h-12 sm:px-4 sm:py-3"
+          rows={1}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          className="max-h-32 min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none transition focus:border-cyan-300 sm:min-h-12 sm:px-4 sm:py-3"
           placeholder="Write a message..."
         />
         <button disabled={sending || (!text.trim() && !attachments.length)} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-sm font-semibold disabled:opacity-60 sm:flex sm:h-12 sm:w-auto sm:gap-2 sm:px-5">
@@ -1216,6 +1377,12 @@ function ThreadCard({ thread, active, presence, typingNames, muted, onOpen }: { 
           <span className="flex items-center justify-between gap-2">
             <span className="truncate font-semibold">{thread.title}</span>
             {thread.unreadCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19]">{thread.unreadCount}</span>}
+          </span>
+          <span className="mt-0.5 flex items-center gap-1.5">
+            <span className="rounded-full bg-white/8 px-2 py-0.5 text-[10px] font-semibold text-white/45">
+              {thread.type === "direct" ? "Direct" : "Team request"}
+            </span>
+            {thread.type === "request" && thread.requestStatus && <StatusBadge status={thread.requestStatus} />}
           </span>
           <span className={`block truncate text-xs ${typingNames.length ? "text-cyan-200" : "text-white/50"}`}>
             {typingNames.length ? `${typingNames.slice(0, 2).join(", ")} typing...` : thread.subtitle}
@@ -1312,10 +1479,21 @@ function ReadReceipt({ message }: { message: MessageRow }) {
   return <span title="Sent"><Check className="h-3.5 w-3.5" /></span>;
 }
 
+function StatusBadge({ status }: { status: string }) {
+  const normalized = status.toLowerCase();
+  const className = normalized === "accepted"
+    ? "bg-emerald-400/15 text-emerald-100"
+    : normalized === "rejected"
+      ? "bg-red-400/15 text-red-100"
+      : "bg-yellow-300/15 text-yellow-100";
+  return <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${className}`}>{status}</span>;
+}
+
 function PresenceLine({ presence, typing }: { presence?: Presence; typing: string[] }) {
   if (typing.length) return <span className="flex items-center gap-2 text-xs text-cyan-200">{typing.join(", ")} {typing.length === 1 ? "is" : "are"} typing <TypingDots /></span>;
   if (!presence) return <p className="text-xs text-white/45">Offline</p>;
-  const label = presence.status === "online" ? "Online" : presence.status === "away" ? "Away" : `Last seen ${smartDateTime(presence.last_seen_at)}`;
+  const effective = effectivePresence(presence);
+  const label = effective === "online" ? "Online" : effective === "away" ? "Away" : `Last seen ${smartDateTime(presence.last_seen_at)}`;
   return <p className="text-xs text-white/45">{label}</p>;
 }
 
@@ -1348,8 +1526,17 @@ function NoMessages() {
   return <div className="grid h-full place-items-center rounded-2xl bg-white/5 p-8 text-center text-sm text-white/45">No messages yet. Start the conversation.</div>;
 }
 
-function EmptyInbox() {
-  return <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/55">No conversations yet. Open a profile and send a message.</div>;
+function EmptyInbox({ filter = "all", query = "" }: { filter?: InboxFilter; query?: string }) {
+  const copy = query.trim()
+    ? "No matching conversations."
+    : filter === "unread"
+      ? "No unread messages."
+      : filter === "requests"
+        ? "No team request conversations yet."
+        : filter === "direct"
+          ? "No direct messages yet."
+          : "No conversations yet. Open a profile and send a message.";
+  return <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/55">{copy}</div>;
 }
 
 function ThreadSkeleton() {
@@ -1372,7 +1559,7 @@ function highlight(text: string, query: string) {
 }
 
 function isVisibleFor(userId: string) {
-  return (message: MessageRow) => !message.deleted_for_everyone && !(message.deleted_for ?? []).includes(userId);
+  return (message: MessageRow) => !(message.deleted_for ?? []).includes(userId);
 }
 
 function isUnread(message: MessageRow, userId: string) {
@@ -1547,9 +1734,17 @@ function smartDateTime(value: string) {
 }
 
 function presenceColor(presence: Presence) {
-  if (presence.status === "online") return "bg-emerald-400";
-  if (presence.status === "away") return "bg-yellow-300";
+  const effective = effectivePresence(presence);
+  if (effective === "online") return "bg-emerald-400";
+  if (effective === "away") return "bg-yellow-300";
   return "bg-gray-400";
+}
+
+function effectivePresence(presence: Presence) {
+  const age = Date.now() - new Date(presence.last_seen_at).getTime();
+  if (age < 2 * 60 * 1000 && presence.status === "online") return "online";
+  if (age < 10 * 60 * 1000 && presence.status !== "offline") return "away";
+  return "offline";
 }
 
 function playMessageSound() {

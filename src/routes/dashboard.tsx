@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import { Ban, Flag, Heart, MessageCircle, MoreVertical, Send, Share2, Trash2, Users, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
@@ -47,6 +47,10 @@ type ShareTarget = Profile & {
   teamNames: string[];
 };
 
+type LikedUser = Profile & {
+  following: boolean;
+};
+
 function DashboardRoute() {
   return (
     <ProtectedPage>
@@ -73,9 +77,12 @@ function HomeFeed() {
   const [shareTargets, setShareTargets] = useState<ShareTarget[]>([]);
   const [postToShare, setPostToShare] = useState<Post | null>(null);
   const [postToReport, setPostToReport] = useState<Post | null>(null);
+  const [likesPost, setLikesPost] = useState<Post | null>(null);
+  const [likedUsers, setLikedUsers] = useState<LikedUser[]>([]);
   const [reportReason, setReportReason] = useState("Harassment or hate");
   const [reportDetails, setReportDetails] = useState("");
   const [sharingTo, setSharingTo] = useState<string | null>(null);
+  const [likesLoading, setLikesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
 
@@ -228,6 +235,86 @@ function HomeFeed() {
     setPostToShare(post);
   };
 
+  const openLikedUsers = async (post: Post) => {
+    if (!user) return;
+    setLikesPost(post);
+    setLikesLoading(true);
+    setLikedUsers([]);
+
+    const likeResult = await (supabase as any)
+      .from("post_likes")
+      .select("user_id, created_at")
+      .eq("post_id", post.id)
+      .order("created_at", { ascending: false });
+
+    if (likeResult.error) {
+      toast.error(likeResult.error.message);
+      setLikesLoading(false);
+      return;
+    }
+
+    const likeRows = (likeResult.data as Array<{ user_id: string }>) ?? [];
+    const likedUserIds = [...new Set(likeRows.map((like) => like.user_id))];
+    if (!likedUserIds.length) {
+      setLikesLoading(false);
+      return;
+    }
+
+    const [profileResult, followingResult] = await Promise.all([
+      supabase.from("profiles").select("*").in("id", likedUserIds),
+      (supabase as any)
+        .from("user_follows")
+        .select("following_id")
+        .eq("follower_id", user.id)
+        .in("following_id", likedUserIds),
+    ]);
+
+    if (profileResult.error) {
+      toast.error(profileResult.error.message);
+      setLikesLoading(false);
+      return;
+    }
+
+    const followingIds = new Set(((followingResult.data as Array<{ following_id: string }>) ?? []).map((row) => row.following_id));
+    const profileMap = new Map(((profileResult.data as Profile[]) ?? []).map((item) => [item.id, item]));
+
+    setLikedUsers(
+      likedUserIds
+        .map((id) => profileMap.get(id))
+        .filter(Boolean)
+        .map((item) => ({ ...(item as Profile), following: followingIds.has((item as Profile).id) })),
+    );
+    setLikesLoading(false);
+  };
+
+  const toggleFollowFromLikes = async (likedUser: LikedUser) => {
+    if (!user || likedUser.id === user.id) return;
+
+    if (likedUser.following) {
+      const { error } = await (supabase as any)
+        .from("user_follows")
+        .delete()
+        .eq("follower_id", user.id)
+        .eq("following_id", likedUser.id);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+    } else {
+      const { error } = await (supabase as any)
+        .from("user_follows")
+        .insert({ follower_id: user.id, following_id: likedUser.id });
+      if (error) {
+        toast.error(error.message.includes("duplicate") ? "Already following." : error.message);
+        return;
+      }
+    }
+
+    setLikedUsers((current) => (
+      current.map((item) => item.id === likedUser.id ? { ...item, following: !item.following } : item)
+    ));
+  };
+
   const deletePost = async (post: Post) => {
     if (!user || post.user_id !== user.id) return;
     const { error } = await (supabase as any).from("posts").delete().eq("id", post.id).eq("user_id", user.id);
@@ -378,6 +465,7 @@ function HomeFeed() {
             commentText={commentText[post.id] ?? ""}
             setCommentText={(value) => setCommentText((current) => ({ ...current, [post.id]: value }))}
             onLike={() => toggleLike(post)}
+            onOpenLikes={() => openLikedUsers(post)}
             onComment={(event) => addComment(event, post)}
             onShare={() => sharePost(post)}
             onDelete={() => deletePost(post)}
@@ -507,6 +595,68 @@ function HomeFeed() {
           </motion.form>
         </div>
       )}
+
+      {likesPost && (
+        <div className="fixed inset-0 z-[85] flex items-end justify-center bg-black/60 px-0 backdrop-blur-sm sm:items-center sm:px-4">
+          <motion.div
+            initial={{ opacity: 0, y: 32, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            className="glass-strong neon-border max-h-[82vh] w-full overflow-hidden rounded-t-3xl p-0 shadow-2xl sm:max-w-lg sm:rounded-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+              <div>
+                <h2 className="text-xl font-bold">Liked by</h2>
+                <p className="text-xs text-white/45">{likesPost.likes} like{likesPost.likes === 1 ? "" : "s"}</p>
+              </div>
+              <button onClick={() => setLikesPost(null)} className="rounded-xl p-2 text-white/60 hover:bg-white/10">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="max-h-[68vh] overflow-y-auto p-4">
+              {likesLoading ? (
+                <div className="grid min-h-36 place-items-center text-sm text-white/55">Loading likes...</div>
+              ) : likedUsers.length ? likedUsers.map((likedUser) => (
+                <div key={likedUser.id} className="flex items-center gap-3 rounded-2xl p-3 transition hover:bg-white/5">
+                  <Link to="/profiles/$id" params={{ id: likedUser.id }} onClick={() => setLikesPost(null)} className="flex min-w-0 flex-1 items-center gap-3">
+                    {likedUser.avatar_url ? (
+                      <img src={likedUser.avatar_url} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover ring-1 ring-white/10" />
+                    ) : (
+                      <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 font-bold text-white ring-1 ring-white/10">
+                        {initials(likedUser)}
+                      </span>
+                    )}
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold">
+                        {likedUser.full_name || likedUser.username || "SyncUp user"}
+                      </span>
+                      <span className="block truncate text-xs text-white/50">
+                        {likedUser.role || likedUser.college || likedUser.bio || "@profile"}
+                      </span>
+                    </span>
+                  </Link>
+                  {likedUser.id !== user?.id && (
+                    <button
+                      onClick={() => toggleFollowFromLikes(likedUser)}
+                      className={`shrink-0 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                        likedUser.following
+                          ? "border border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                          : "bg-cyan-300 text-[#0B0F19] hover:bg-cyan-200"
+                      }`}
+                    >
+                      {likedUser.following ? "Following" : "Follow"}
+                    </button>
+                  )}
+                </div>
+              )) : (
+                <div className="grid min-h-36 place-items-center rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-sm text-white/55">
+                  No likes yet
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
@@ -516,6 +666,7 @@ function PostCard({
   commentText,
   setCommentText,
   onLike,
+  onOpenLikes,
   onComment,
   onShare,
   onDelete,
@@ -527,6 +678,7 @@ function PostCard({
   commentText: string;
   setCommentText: (value: string) => void;
   onLike: () => void;
+  onOpenLikes: () => void;
   onComment: (event: React.FormEvent) => void;
   onShare: () => void;
   onDelete: () => void;
@@ -534,7 +686,11 @@ function PostCard({
   onBlock: () => void;
   currentUserId?: string;
 }) {
+  const { profile: viewerProfile, user: viewerUser } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentLikes, setCommentLikes] = useState<Record<string, string[]>>(() => readLocalCommentLikes());
+  const commentInputRef = useRef<HTMLInputElement | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "light";
     return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
@@ -547,6 +703,33 @@ function PostCard({
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);
+
+  const replyToComment = (comment: Comment) => {
+    const handle = comment.profile?.username || comment.profile?.full_name?.split(" ")[0] || "builder";
+    setCommentsOpen(true);
+    setCommentText(`@${handle} `);
+    window.setTimeout(() => commentInputRef.current?.focus(), 0);
+  };
+
+  const toggleComments = () => {
+    setCommentsOpen((open) => {
+      if (!open) window.setTimeout(() => commentInputRef.current?.focus(), 0);
+      return !open;
+    });
+  };
+
+  const toggleCommentLike = (commentId: string) => {
+    if (!viewerUser) return;
+    setCommentLikes((current) => {
+      const likedBy = current[commentId] ?? [];
+      const nextLikedBy = likedBy.includes(viewerUser.id)
+        ? likedBy.filter((id) => id !== viewerUser.id)
+        : [...likedBy, viewerUser.id];
+      const next = { ...current, [commentId]: nextLikedBy };
+      saveLocalCommentLikes(next);
+      return next;
+    });
+  };
 
   return (
     <motion.article initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong rounded-2xl p-5">
@@ -602,11 +785,23 @@ function PostCard({
       </div>
       <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-white/75">{post.content}</p>
       <div className="mt-5 flex flex-wrap items-center gap-2 border-y border-white/10 py-3">
-        <button onClick={onLike} className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition hover:bg-white/10 ${post.liked ? "text-red-200" : "text-white/65"}`}>
-          <Heart className={`h-4 w-4 ${post.liked ? "fill-current" : ""}`} />
-          Like {post.likes ? post.likes : ""}
-        </button>
-        <button className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/65 transition hover:bg-white/10">
+        <div className={`flex items-center gap-1 rounded-xl px-3 py-2 text-sm transition hover:bg-white/10 ${post.liked ? "text-red-200" : "text-white/65"}`}>
+          <button onClick={onLike} className="flex items-center gap-2 transition hover:text-red-200">
+            <Heart className={`h-4 w-4 ${post.liked ? "fill-current" : ""}`} />
+            <span>Like</span>
+          </button>
+          {post.likes > 0 && (
+            <button
+              type="button"
+              onClick={onOpenLikes}
+              className="rounded-md px-1 font-semibold transition hover:text-cyan-200"
+              title="See who liked this post"
+            >
+              {post.likes}
+            </button>
+          )}
+        </div>
+        <button onClick={toggleComments} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/65 transition hover:bg-white/10">
           <MessageCircle className="h-4 w-4" />
           Comment {post.comments.length ? post.comments.length : ""}
         </button>
@@ -615,29 +810,126 @@ function PostCard({
           Share {post.shares ? post.shares : ""}
         </button>
       </div>
-      <div className="mt-4 space-y-3">
-        {post.comments.slice(-3).map((comment) => (
-          <div key={comment.id} className="rounded-xl bg-white/5 p-3">
-            <Link to="/profiles/$id" params={{ id: comment.user_id }} className="text-sm font-semibold hover:text-cyan-200">
-              {comment.profile?.full_name || comment.profile?.username || "SyncUp user"}
-            </Link>
-            <p className="mt-1 text-sm text-white/60">{comment.content}</p>
-          </div>
-        ))}
-      </div>
-      <form onSubmit={onComment} className="mt-4 flex gap-2">
-        <input
-          value={commentText}
-          onChange={(event) => setCommentText(event.target.value)}
-          className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none focus:border-cyan-300"
-          placeholder="Add a comment..."
-        />
-        <button disabled={!commentText.trim()} className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold hover:bg-white/10 disabled:opacity-50">
-          Send
-        </button>
-      </form>
+      {commentsOpen && (
+        <div className="mt-3 space-y-2">
+          {post.comments.map((comment) => {
+            const likedBy = commentLikes[comment.id] ?? [];
+            const commentLiked = viewerUser ? likedBy.includes(viewerUser.id) : false;
+            const commentLikeCount = likedBy.length;
+
+            return (
+              <div key={comment.id} className="group flex items-start gap-2.5">
+                <Link to="/profiles/$id" params={{ id: comment.user_id }} className="shrink-0">
+                  {comment.profile?.avatar_url ? (
+                    <img src={comment.profile.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-white/10" />
+                  ) : (
+                    <span className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-xs font-bold text-white ring-1 ring-white/10">
+                      {initials(comment.profile ?? null)}
+                    </span>
+                  )}
+                </Link>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={`inline-block max-w-full rounded-2xl px-3 py-2 text-left sm:max-w-[82%] ${
+                      theme === "light"
+                        ? "bg-slate-100 text-slate-900"
+                        : "bg-white/[0.07] text-white"
+                    }`}
+                  >
+                    <Link to="/profiles/$id" params={{ id: comment.user_id }} className="block text-[13px] font-bold leading-4 hover:text-cyan-200">
+                      {comment.profile?.full_name || comment.profile?.username || "SyncUp user"}
+                    </Link>
+                    <p className={`mt-0.5 whitespace-pre-wrap break-words text-[13px] leading-5 ${theme === "light" ? "text-slate-700" : "text-white/70"}`}>
+                      {comment.content}
+                    </p>
+                  </div>
+                  <div className={`ml-3 mt-1 flex items-center gap-3 text-[11px] font-semibold ${theme === "light" ? "text-slate-500" : "text-white/40"}`}>
+                    <button
+                      type="button"
+                      onClick={() => toggleCommentLike(comment.id)}
+                      className={`transition hover:text-cyan-200 ${commentLiked ? "text-cyan-300" : ""}`}
+                    >
+                      Like{commentLikeCount ? ` ${commentLikeCount}` : ""}
+                    </button>
+                    <button type="button" onClick={() => replyToComment(comment)} className="transition hover:text-cyan-200">Reply</button>
+                    <span className="font-medium">{timeAgo(comment.created_at)}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          <form onSubmit={onComment} className="flex items-center gap-2.5 pt-1">
+            {viewerProfile?.avatar_url ? (
+              <img src={viewerProfile.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-white/10" />
+            ) : (
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-xs font-bold text-white ring-1 ring-white/10">
+                {initials(viewerProfile, viewerUser?.email)}
+              </span>
+            )}
+            <div
+              className={`flex min-w-0 flex-1 items-center rounded-full border px-3 py-1.5 transition focus-within:border-cyan-300 ${
+                theme === "light"
+                  ? "border-slate-200 bg-slate-100"
+                  : "border-white/10 bg-white/[0.06]"
+              }`}
+            >
+              <input
+                ref={commentInputRef}
+                value={commentText}
+                onChange={(event) => setCommentText(event.target.value)}
+                className={`min-w-0 flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none ${
+                  theme === "light" ? "text-slate-900 placeholder:text-slate-500" : "text-white placeholder:text-white/40"
+                }`}
+                placeholder="Add a comment..."
+              />
+              <button
+                type="submit"
+                disabled={!commentText.trim()}
+                className={`grid h-8 w-8 shrink-0 place-items-center rounded-full transition ${
+                  commentText.trim()
+                    ? "bg-cyan-300 text-[#0B0F19] hover:bg-cyan-200"
+                    : theme === "light"
+                      ? "text-slate-400"
+                      : "text-white/35"
+                }`}
+                title="Send comment"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </motion.article>
   );
+}
+
+function readLocalCommentLikes() {
+  if (typeof window === "undefined") return {} as Record<string, string[]>;
+  try {
+    return JSON.parse(window.localStorage.getItem("syncup_comment_likes") ?? "{}") as Record<string, string[]>;
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalCommentLikes(value: Record<string, string[]>) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem("syncup_comment_likes", JSON.stringify(value));
+}
+
+function timeAgo(value: string) {
+  const seconds = Math.max(1, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  const weeks = Math.floor(days / 7);
+  return `${weeks}w`;
 }
 
 function SignalScout() {
