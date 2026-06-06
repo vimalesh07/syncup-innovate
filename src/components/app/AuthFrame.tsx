@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Sparkles } from "lucide-react";
+import { BrandLogo } from "@/components/app/BrandLogo";
 import { CursorGlow, FloatingParticles, GradientBlobs } from "@/components/landing/Background";
 
 export function AuthFrame({
@@ -26,11 +26,8 @@ export function AuthFrame({
           transition={{ duration: 0.45 }}
           className="w-full max-w-2xl"
         >
-          <Link to="/" className="mb-8 flex items-center justify-center gap-2">
-            <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-blue-500 via-purple-500 to-cyan-400 glow-blue">
-              <Sparkles className="h-5 w-5" />
-            </div>
-            <span className="text-2xl font-bold">Sync<span className="text-gradient">Up</span></span>
+          <Link to="/" className="mb-8 flex items-center justify-center">
+            <BrandLogo variant="dark" />
           </Link>
 
           <section className="neon-border glass-strong rounded-2xl p-6 shadow-2xl sm:p-8">

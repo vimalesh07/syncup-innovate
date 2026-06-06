@@ -13,7 +13,6 @@ import {
   Share2,
   Trash2,
   Trophy,
-  UserPlus,
   Users,
   X,
 } from "lucide-react";
@@ -565,21 +564,6 @@ function HomeFeed() {
                 Join or create a team to see it here.
               </Link>
             )}
-          </div>
-        </section>
-        <section className="syncup-card p-4">
-          <h2 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-slate-50"><UserPlus className="h-5 w-5 text-cyan-700 dark:text-cyan-300" /> Suggested Builders</h2>
-          <div className="mt-3 space-y-3">
-            {shareTargets.slice(0, 3).map((target) => (
-              <Link key={target.id} to="/profiles/$id" params={{ id: target.id }} className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-slate-50 dark:hover:bg-slate-800">
-                <SafeAvatar profile={target} className="h-10 w-10 text-xs" />
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{target.full_name || target.username || "SyncUp user"}</span>
-                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{target.role || target.teamNames[0] || "Builder"}</span>
-                </span>
-              </Link>
-            ))}
-            {!shareTargets.length && <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400">Collaborator suggestions appear after you join teams.</p>}
           </div>
         </section>
       </aside>

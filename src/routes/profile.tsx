@@ -16,6 +16,7 @@ import {
   Heart,
   Linkedin,
   Loader2,
+  LogOut,
   MapPin,
   MessageSquare,
   Save,
@@ -528,6 +529,12 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
     navigate({ to: "/" });
   };
 
+  const logout = async () => {
+    await supabase.auth.signOut();
+    toast.success("Logged out.");
+    navigate({ to: "/" });
+  };
+
   if (profileLoading) {
     return (
       <section className="profile-card p-8 text-center">
@@ -587,6 +594,14 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
                         <span>Edit Profile</span>
                       </button>
                       <button type="button" onClick={openShareModal} className="profile-secondary-button justify-center"><Share2 className="h-4 w-4" /> Share Profile</button>
+                      <button
+                        type="button"
+                        onClick={logout}
+                        className="profile-secondary-button justify-center text-red-700 hover:border-red-200 hover:bg-red-50 hover:text-red-800 dark:text-red-200 dark:hover:border-red-900 dark:hover:bg-red-950/30"
+                      >
+                        <LogOut className="h-4 w-4" />
+                        Logout
+                      </button>
                     </>
                   ) : (
                     <>

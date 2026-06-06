@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Bookmark, Copy, Edit3, Loader2, MailPlus, MessageSquare, MoreVertical, Pencil, Reply, Save, Send, Trash2, Users, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { PlatformShell } from "@/components/app/PlatformShell";
@@ -83,6 +84,7 @@ function TeamDetail() {
   const [teamMessagesLoading, setTeamMessagesLoading] = useState(false);
   const [sendingTeamMessage, setSendingTeamMessage] = useState(false);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
+  const [teamMessageMenuPosition, setTeamMessageMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const [replyToTeamMessage, setReplyToTeamMessage] = useState<TeamMessage | null>(null);
   const [editingTeamMessage, setEditingTeamMessage] = useState<TeamMessage | null>(null);
   const teamMessageScrollRef = useRef<HTMLDivElement | null>(null);
@@ -152,16 +154,28 @@ function TeamDetail() {
       const target = event.target as HTMLElement | null;
       if (target?.closest(".message-action-menu, .message-action-button")) return;
       setOpenMessageMenuId(null);
+      setTeamMessageMenuPosition(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenMessageMenuId(null);
+      if (event.key === "Escape") {
+        setOpenMessageMenuId(null);
+        setTeamMessageMenuPosition(null);
+      }
+    };
+    const closeOnViewportChange = () => {
+      setOpenMessageMenuId(null);
+      setTeamMessageMenuPosition(null);
     };
 
     document.addEventListener("pointerdown", closeOnOutsidePress);
     document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsidePress);
       document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
     };
   }, [openMessageMenuId]);
 
@@ -364,6 +378,7 @@ function TeamDetail() {
     if (!user) return;
     const deletedFor = Array.from(new Set([...(item.deleted_for ?? []), user.id]));
     setOpenMessageMenuId(null);
+    setTeamMessageMenuPosition(null);
     setTeamMessages((current) => current.filter((message) => message.id !== item.id));
     const { error } = await (supabase as any).from("team_messages").update({ deleted_for: deletedFor }).eq("id", item.id);
     if (error) {
@@ -380,6 +395,7 @@ function TeamDetail() {
     if (!confirmed) return;
     const deletedAt = new Date().toISOString();
     setOpenMessageMenuId(null);
+    setTeamMessageMenuPosition(null);
     setTeamMessages((current) => current.map((message) => message.id === item.id ? { ...message, message: "", deleted_for_everyone: true, deleted_at: deletedAt, deleted_by: user.id } : message));
     const { error } = await (supabase as any)
       .from("team_messages")
@@ -472,9 +488,35 @@ function TeamDetail() {
     }
   };
 
+  const closeTeamMessageMenu = () => {
+    setOpenMessageMenuId(null);
+    setTeamMessageMenuPosition(null);
+  };
+
+  const toggleTeamMessageMenu = (event: MouseEvent<HTMLButtonElement>, item: TeamMessage, own: boolean) => {
+    if (openMessageMenuId === item.id) {
+      closeTeamMessageMenu();
+      return;
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 208;
+    const menuHeight = own ? 220 : 148;
+    const gutter = 12;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const top = spaceBelow < menuHeight + gutter
+      ? Math.max(gutter, rect.top - menuHeight - 8)
+      : Math.min(window.innerHeight - menuHeight - gutter, rect.bottom + 8);
+    const preferredLeft = own ? rect.right - menuWidth : rect.left;
+    const left = Math.min(window.innerWidth - menuWidth - gutter, Math.max(gutter, preferredLeft));
+
+    setTeamMessageMenuPosition({ top, left });
+    setOpenMessageMenuId(item.id);
+  };
+
   const copyTeamMessage = async (item: TeamMessage) => {
     await navigator.clipboard.writeText(item.message);
-    setOpenMessageMenuId(null);
+    closeTeamMessageMenu();
     toast.success("Message copied.");
   };
 
@@ -482,7 +524,7 @@ function TeamDetail() {
     setEditingTeamMessage(item);
     setReplyToTeamMessage(null);
     setTeamMessageText(item.message);
-    setOpenMessageMenuId(null);
+    closeTeamMessageMenu();
   };
 
   if (!team) {
@@ -617,7 +659,17 @@ function TeamDetail() {
                     </Link>
                   )}
                   <div className={`relative min-w-0 ${sharedPost ? "w-fit max-w-[85%] sm:max-w-[680px]" : "max-w-[85%] sm:max-w-[620px]"} ${own ? "ml-auto" : "mr-auto"}`}>
-                    <div className={`rounded-2xl px-4 py-3 text-sm shadow-sm ${own ? "bg-cyan-300/20 text-cyan-50" : "bg-white/8 text-white/75"}`}>
+                    <div className={`relative rounded-2xl px-4 py-3 text-sm shadow-sm ${own ? "bg-cyan-300/20 text-cyan-50" : "bg-white/8 text-white/75"}`}>
+                      {!deleted && (
+                        <button
+                          type="button"
+                          onClick={(event) => toggleTeamMessageMenu(event, item, own)}
+                          className="message-action-button absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-lg border border-white/10 text-white/60 opacity-100 transition hover:bg-white/10 hover:text-white sm:opacity-0 sm:group-hover:opacity-100"
+                          title="Message actions"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </button>
+                      )}
                       {!own && <p className="mb-1 text-xs font-semibold text-cyan-100">{item.profile?.full_name || item.profile?.username || "Team member"}</p>}
                       {reply && !deleted && (
                         <div className="mb-2 rounded-lg border-l-2 border-cyan-300 bg-black/15 px-3 py-2 text-xs text-white/55">
@@ -629,60 +681,40 @@ function TeamDetail() {
                       ) : sharedPost ? (
                         <TeamSharedPostPreview sharedPost={sharedPost} />
                       ) : (
-                        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.message}</p>
+                        <p className="whitespace-pre-wrap break-words pr-7 [overflow-wrap:anywhere] sm:pr-0">{item.message}</p>
                       )}
                       <p className={`mt-2 text-[10px] text-white/35 ${own ? "text-right" : "text-left"}`}>
                         {item.delivery_status === "sending" ? "Sending..." : item.delivery_status === "failed" ? "Failed to send" : `${item.edited_at ? "edited · " : ""}${new Date(item.created_at).toLocaleString()}`}
                       </p>
                     </div>
-                    {!deleted && (
-                      <button onClick={() => setOpenMessageMenuId(openMessageMenuId === item.id ? null : item.id)} className="message-action-button absolute right-2 top-2 rounded-lg p-1 text-white/50 hover:bg-white/10 sm:hidden">
-                        <MoreVertical className="h-4 w-4" />
-                      </button>
-                    )}
-                    {!deleted && (
-                      <div className={`absolute -top-9 hidden items-center gap-1 rounded-xl border border-white/10 bg-[#101827]/95 p-1 shadow-xl backdrop-blur sm:group-hover:flex ${own ? "right-0" : "left-0"}`}>
-                        <button onClick={() => { setReplyToTeamMessage(item); setEditingTeamMessage(null); setOpenMessageMenuId(null); }} className="grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="Reply">
-                          <Reply className="h-3.5 w-3.5" />
-                        </button>
-                        <button onClick={() => copyTeamMessage(item)} className="grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="Copy">
-                          <Copy className="h-3.5 w-3.5" />
-                        </button>
-                        {own && (
-                          <button onClick={() => editTeamMessage(item)} className="grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="Edit">
-                            <Edit3 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                        <button onClick={() => setOpenMessageMenuId(openMessageMenuId === item.id ? null : item.id)} className="message-action-button grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="More">
-                          <MoreVertical className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    )}
-                    {!deleted && openMessageMenuId === item.id && (
-                      <div className="message-action-menu absolute right-0 top-9 z-20 w-44 rounded-xl border border-white/10 bg-[#101827] p-2 shadow-2xl">
-                        <button onClick={() => { setReplyToTeamMessage(item); setEditingTeamMessage(null); setOpenMessageMenuId(null); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
+                    {!deleted && openMessageMenuId === item.id && teamMessageMenuPosition && typeof document !== "undefined" && createPortal(
+                      <div className="message-action-menu fixed z-[9999] w-52 rounded-xl border border-white/10 bg-[#0B0F19]/95 p-2 shadow-2xl backdrop-blur-xl" style={{ top: teamMessageMenuPosition.top, left: teamMessageMenuPosition.left }}>
+                        <button onClick={() => { setReplyToTeamMessage(item); setEditingTeamMessage(null); closeTeamMessageMenu(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10">
                           <Reply className="h-3.5 w-3.5" />
                           Reply
                         </button>
-                        <button onClick={() => copyTeamMessage(item)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
+                        <button onClick={() => { copyTeamMessage(item); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10">
                           <Copy className="h-3.5 w-3.5" />
                           Copy
                         </button>
-                        <button onClick={() => deleteTeamMessageForMe(item)} className="block w-full rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
+                        <button onClick={() => { deleteTeamMessageForMe(item); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10">
+                          <Trash2 className="h-3.5 w-3.5" />
                           Delete for me
                         </button>
                         {own && (
                           <>
-                            <button onClick={() => editTeamMessage(item)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
+                            <button onClick={() => { editTeamMessage(item); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10">
                               <Edit3 className="h-3.5 w-3.5" />
                               Edit
                             </button>
-                            <button onClick={() => deleteTeamMessageForEveryone(item)} className="block w-full rounded-lg px-3 py-2 text-left text-xs text-red-200 hover:bg-red-500/10">
+                            <button onClick={() => { deleteTeamMessageForEveryone(item); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-500/10">
+                              <Trash2 className="h-3.5 w-3.5" />
                               Delete for everyone
                             </button>
                           </>
                         )}
-                      </div>
+                      </div>,
+                      document.body,
                     )}
                   </div>
                 </div>
