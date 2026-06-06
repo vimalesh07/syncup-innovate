@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import {
   Ban,
@@ -26,6 +26,7 @@ import { Profile, profileCompletion } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
 import { notifyFollowers } from "@/lib/social";
 import { directMessageNotification, insertNotification } from "@/lib/notifications";
+import { sendConnectionRequest, unfollowUser } from "@/lib/connections";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Home | SyncUp" }] }),
@@ -66,6 +67,8 @@ type ShareTarget = Profile & {
 
 type LikedUser = Profile & {
   following: boolean;
+  requested: boolean;
+  incomingRequest: boolean;
 };
 
 function DashboardRoute() {
@@ -96,6 +99,7 @@ function HomeFeed() {
   const [postToReport, setPostToReport] = useState<Post | null>(null);
   const [likesPost, setLikesPost] = useState<Post | null>(null);
   const [likedUsers, setLikedUsers] = useState<LikedUser[]>([]);
+  const navigate = useNavigate();
   const [reportReason, setReportReason] = useState("Harassment or hate");
   const [reportDetails, setReportDetails] = useState("");
   const [sharingTo, setSharingTo] = useState<string | null>(null);
@@ -291,13 +295,25 @@ function HomeFeed() {
       return;
     }
 
-    const [profileResult, followingResult] = await Promise.all([
+    const [profileResult, followingResult, requestResult, incomingRequestResult] = await Promise.all([
       supabase.from("profiles").select("*").in("id", likedUserIds),
       (supabase as any)
         .from("user_follows")
         .select("following_id")
         .eq("follower_id", user.id)
         .in("following_id", likedUserIds),
+      (supabase as any)
+        .from("connection_requests")
+        .select("receiver_id")
+        .eq("sender_id", user.id)
+        .eq("status", "pending")
+        .in("receiver_id", likedUserIds),
+      (supabase as any)
+        .from("connection_requests")
+        .select("sender_id")
+        .eq("receiver_id", user.id)
+        .eq("status", "pending")
+        .in("sender_id", likedUserIds),
     ]);
 
     if (profileResult.error) {
@@ -307,6 +323,8 @@ function HomeFeed() {
     }
 
     const followingIds = new Set(((followingResult.data as Array<{ following_id: string }>) ?? []).map((row) => row.following_id));
+    const requestedIds = new Set(((requestResult.data as Array<{ receiver_id: string }>) ?? []).map((row) => row.receiver_id));
+    const incomingRequestIds = new Set(((incomingRequestResult.data as Array<{ sender_id: string }>) ?? []).map((row) => row.sender_id));
     const profileMap = new Map(
       ((profileResult.data as Profile[]) ?? [])
         .filter((item) => item?.id)
@@ -322,7 +340,12 @@ function HomeFeed() {
         .filter(Boolean)
         .map((item) => {
           const normalizedProfile = normalizeFeedProfile(item as Profile);
-          return { ...normalizedProfile, following: followingIds.has(normalizedProfile.id) };
+          return {
+            ...normalizedProfile,
+            following: followingIds.has(normalizedProfile.id),
+            requested: requestedIds.has(normalizedProfile.id),
+            incomingRequest: incomingRequestIds.has(normalizedProfile.id),
+          };
         }),
     );
     setLikesLoading(false);
@@ -330,30 +353,38 @@ function HomeFeed() {
 
   const toggleFollowFromLikes = async (likedUser: LikedUser) => {
     if (!user || likedUser.id === user.id) return;
+    if (likedUser.incomingRequest) {
+      toast.info("They already sent you a request. Open their profile to accept it.");
+      navigate({ to: "/profile/$username", params: { username: likedUser.username || likedUser.id } });
+      return;
+    }
+
+    if (likedUser.requested) {
+      toast.info("Connection request is already pending.");
+      return;
+    }
 
     if (likedUser.following) {
-      const { error } = await (supabase as any)
-        .from("user_follows")
-        .delete()
-        .eq("follower_id", user.id)
-        .eq("following_id", likedUser.id);
+      const { error } = await unfollowUser(user.id, likedUser.id);
       if (error) {
         toast.error(error.message);
         return;
       }
+      setLikedUsers((current) => (
+        current.map((item) => item.id === likedUser.id ? { ...item, following: false } : item)
+      ));
+      toast.success("Unfollowed.");
     } else {
-      const { error } = await (supabase as any)
-        .from("user_follows")
-        .insert({ follower_id: user.id, following_id: likedUser.id });
+      const { error } = await sendConnectionRequest(profile ?? { id: user.id, full_name: user.email }, likedUser);
       if (error) {
-        toast.error(error.message.includes("duplicate") ? "Already following." : error.message);
+        toast.error(error.message.includes("duplicate") ? "Request already pending." : error.message);
         return;
       }
+      setLikedUsers((current) => (
+        current.map((item) => item.id === likedUser.id ? { ...item, requested: true } : item)
+      ));
+      toast.success("Connection request sent.");
     }
-
-    setLikedUsers((current) => (
-      current.map((item) => item.id === likedUser.id ? { ...item, following: !item.following } : item)
-    ));
   };
 
   const deletePost = async (post: Post) => {
@@ -446,18 +477,20 @@ function HomeFeed() {
   };
 
   return (
-    <div className="dashboard-shell grid min-w-0 gap-5 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(600px,680px)_300px]">
-      <aside className="hidden space-y-4 lg:block">
+    <div className="dashboard-shell grid w-full min-w-0 max-w-full gap-4 overflow-x-hidden lg:h-[calc(100svh-6rem)] lg:grid-cols-[240px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[250px_minmax(0,1fr)_280px] 2xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+      <aside className="hidden min-w-0 space-y-4 overflow-x-hidden lg:block lg:h-full lg:overflow-y-auto lg:pr-1">
         <section className="syncup-card overflow-hidden p-0">
           <div className="px-4 py-4">
             <div>
-              <SafeAvatar profile={profile} fallback={user?.email} className="h-20 w-20 border-4 border-white text-xl shadow-sm dark:border-slate-800" />
+              <SafeAvatar profile={profile} fallback={user?.email} className="h-20 w-20 shrink-0 border-4 border-white text-xl shadow-sm dark:border-slate-800" />
             </div>
-            <h2 className="mt-3 text-base font-bold text-slate-950 dark:text-slate-50">{profile?.full_name || profile?.username || "SyncUp user"}</h2>
-            <p className="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-400">{profile?.role || profile?.bio || "Student builder"}</p>
-            <p className="mt-2 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
-              <MapPin className="h-3.5 w-3.5" />
-              {profile?.college || "College or location not added"}
+            <Link to="/profile/$username" params={{ username: profile?.username || profile?.id || "" }} className="mt-3 block break-words text-base font-bold text-slate-950 dark:text-slate-50 hover:text-cyan-700 dark:hover:text-cyan-300">
+              {profile?.full_name || profile?.username || "SyncUp user"}
+            </Link>
+            <p className="mt-1 break-words text-sm leading-5 text-slate-600 dark:text-slate-400">{profile?.role || profile?.bio || "Student builder"}</p>
+            <p className="mt-2 flex min-w-0 items-start gap-1 text-xs text-slate-500 dark:text-slate-400">
+              <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 break-words">{profile?.college || "College or location not added"}</span>
             </p>
             <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/70">
               <div className="flex items-center justify-between text-xs font-semibold">
@@ -482,7 +515,27 @@ function HomeFeed() {
         </section>
       </aside>
 
-      <section className="min-w-0 space-y-4">
+      <section className="min-w-0 space-y-4 overflow-x-hidden lg:h-full lg:overflow-y-auto lg:px-1">
+        <section className="syncup-card overflow-hidden p-4 lg:hidden">
+          <div className="flex min-w-0 items-center gap-3">
+            <SafeAvatar profile={profile} fallback={user?.email} className="h-14 w-14 shrink-0 border-2 border-white text-base shadow-sm dark:border-slate-800" />
+            <div className="min-w-0 flex-1">
+              <Link to="/profile/$username" params={{ username: profile?.username || profile?.id || "" }} className="truncate text-base font-bold text-slate-950 dark:text-slate-50 hover:text-cyan-700 dark:hover:text-cyan-300">
+                {profile?.full_name || profile?.username || "SyncUp user"}
+              </Link>
+              <p className="truncate text-sm text-slate-600 dark:text-slate-400">{profile?.role || profile?.bio || "Student builder"}</p>
+              <p className="mt-1 flex min-w-0 items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                <MapPin className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{profile?.college || "College or location not added"}</span>
+              </p>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-sm font-bold text-cyan-700 dark:text-cyan-300">{profileCompletion(profile)}%</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">Profile</p>
+            </div>
+          </div>
+        </section>
+
         <div className="syncup-card p-4">
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
             <div>
@@ -506,14 +559,14 @@ function HomeFeed() {
         </div>
 
         <form onSubmit={createPost} className="syncup-card p-4">
-          <div className="flex items-start gap-3">
-            <SafeAvatar profile={profile} fallback={user?.email} className="h-12 w-12" />
+          <div className="flex min-w-0 items-start gap-3">
+            <SafeAvatar profile={profile} fallback={user?.email} className="h-12 w-12 shrink-0" />
             <textarea
               value={postText}
               onChange={(event) => setPostText(event.target.value)}
               rows={3}
               maxLength={700}
-              className="min-h-20 flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-cyan-700 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50 dark:placeholder:text-slate-400 dark:focus:border-cyan-300"
+              className="min-h-20 min-w-0 flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-cyan-700 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50 dark:placeholder:text-slate-400 dark:focus:border-cyan-300"
               placeholder="Start a post"
             />
           </div>
@@ -548,9 +601,24 @@ function HomeFeed() {
             {feedMode === "following" ? "No posts from people you follow yet. Follow builders from their profiles to build your feed." : "No posts yet. Share the first team invite or hackathon update."}
           </div>
         )}
+        <section className="syncup-card p-4 xl:hidden">
+          <h2 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-slate-50"><Users className="h-5 w-5 shrink-0 text-cyan-700 dark:text-cyan-300" /> Your Teams</h2>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+            {teams.length ? teams.slice(0, 4).map((team) => (
+              <Link key={team.id} to="/teams/$id" params={{ id: team.id }} className="block min-w-0 rounded-xl border border-slate-100 p-3 transition hover:border-cyan-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-cyan-700 dark:hover:bg-slate-800">
+                <p className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{team.team_name}</p>
+                <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{team.team_purpose || "Team"} Â· {team.project_title || "Project pending"}</p>
+              </Link>
+            )) : (
+              <Link to="/my-teams" className="block rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500 transition hover:border-cyan-200 hover:text-cyan-700 dark:border-slate-700 dark:text-slate-400 dark:hover:border-cyan-700 dark:hover:text-cyan-300">
+                Join or create a team to see it here.
+              </Link>
+            )}
+          </div>
+        </section>
       </section>
 
-      <aside className="hidden space-y-4 xl:block">
+      <aside className="hidden min-w-0 space-y-4 overflow-x-hidden xl:block xl:h-full xl:overflow-y-auto xl:pl-1">
         <section className="syncup-card p-4">
           <h2 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-slate-50"><Users className="h-5 w-5 text-cyan-700 dark:text-cyan-300" /> Your Teams</h2>
           <div className="mt-3 space-y-2">
@@ -696,12 +764,12 @@ function HomeFeed() {
                     <button
                       onClick={() => toggleFollowFromLikes(likedUser)}
                       className={`shrink-0 rounded-xl px-4 py-2 text-xs font-semibold transition ${
-                        likedUser.following
+                        likedUser.following || likedUser.requested || likedUser.incomingRequest
                           ? "border border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
                           : "bg-cyan-300 text-[#0B0F19] hover:bg-cyan-200"
                       }`}
                     >
-                      {likedUser.following ? "Following" : "Follow"}
+                      {likedUser.following ? "Following" : likedUser.requested ? "Requested" : likedUser.incomingRequest ? "Respond" : "Connect"}
                     </button>
                   )}
                 </div>
@@ -844,16 +912,16 @@ function PostCard({
   };
 
   return (
-    <motion.article initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="syncup-card p-4 transition hover:shadow-md">
-      <div className="flex items-start justify-between gap-3">
+    <motion.article initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="syncup-card min-w-0 overflow-hidden p-4 transition hover:shadow-md">
+      <div className="flex min-w-0 items-start justify-between gap-3">
       <Link to="/profiles/$id" params={{ id: post.user_id }} className="flex min-w-0 items-center gap-3 rounded-xl transition hover:bg-slate-50 dark:hover:bg-slate-800">
-        <SafeAvatar profile={post.profile} className="h-12 w-12" />
+        <SafeAvatar profile={post.profile} className="h-12 w-12 shrink-0" />
         <div className="min-w-0">
           <p className="truncate font-semibold text-slate-950 dark:text-slate-50">{post.profile?.full_name || post.profile?.username || "SyncUp user"}</p>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">{post.profile?.role || "Builder"} · {timeAgo(post.created_at)}</p>
         </div>
       </Link>
-        <div className="relative">
+        <div className="relative shrink-0">
           <button onClick={() => setMenuOpen((current) => !current)} className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white" title="Post options">
             <MoreVertical className="h-4 w-4" />
           </button>
@@ -890,9 +958,9 @@ function PostCard({
         </div>
       </div>
       <PostText content={post.content} />
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2 dark:border-slate-700">
-        <div className={`flex items-center gap-1 rounded-full px-3 py-2 text-sm font-semibold transition hover:bg-slate-100 dark:hover:bg-slate-800 ${post.liked ? "text-red-600 dark:text-red-300" : "text-slate-600 dark:text-slate-400"}`}>
-          <button onClick={onLike} className="flex items-center gap-2 transition hover:text-red-600 dark:hover:text-red-300">
+      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-100 pt-2 dark:border-slate-700 sm:grid-cols-4">
+        <div className={`flex min-w-0 items-center justify-center gap-1 rounded-full px-2 py-2 text-sm font-semibold transition hover:bg-slate-100 dark:hover:bg-slate-800 ${post.liked ? "text-red-600 dark:text-red-300" : "text-slate-600 dark:text-slate-400"}`}>
+          <button onClick={onLike} className="flex min-w-0 items-center gap-2 transition hover:text-red-600 dark:hover:text-red-300">
             <Heart className={`h-4 w-4 ${post.liked ? "fill-current" : ""}`} />
             <span>Like</span>
           </button>
@@ -907,17 +975,17 @@ function PostCard({
             </button>
           )}
         </div>
-        <button onClick={toggleComments} className="flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+        <button onClick={toggleComments} className="flex min-w-0 items-center justify-center gap-2 rounded-full px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
           <MessageCircle className="h-4 w-4" />
-          Comment {post.comments.length ? post.comments.length : ""}
+          <span className="truncate">Comment {post.comments.length ? post.comments.length : ""}</span>
         </button>
-        <button onClick={onShare} className="flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+        <button onClick={onShare} className="flex min-w-0 items-center justify-center gap-2 rounded-full px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
           <Share2 className="h-4 w-4" />
-          Share {post.shares ? post.shares : ""}
+          <span className="truncate">Share {post.shares ? post.shares : ""}</span>
         </button>
-        <button type="button" className="flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+        <button type="button" className="flex min-w-0 items-center justify-center gap-2 rounded-full px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
           <Bookmark className="h-4 w-4" />
-          Save
+          <span className="truncate">Save</span>
         </button>
       </div>
       {commentsOpen && (
@@ -928,7 +996,7 @@ function PostCard({
             const commentLikeCount = likedBy.length;
 
             return (
-              <div key={comment.id} className="group flex items-start gap-2.5">
+              <div key={comment.id} className="group flex min-w-0 items-start gap-2.5">
                 <Link to="/profiles/$id" params={{ id: comment.user_id }} className="shrink-0">
                   <SafeAvatar profile={comment.profile} className="h-8 w-8 text-xs" />
                 </Link>
@@ -963,8 +1031,8 @@ function PostCard({
             );
           })}
 
-          <form onSubmit={onComment} className="flex items-center gap-2.5 pt-1">
-            <SafeAvatar profile={viewerProfile} fallback={viewerUser?.email} className="h-8 w-8 text-xs" />
+          <form onSubmit={onComment} className="flex min-w-0 items-center gap-2.5 pt-1">
+            <SafeAvatar profile={viewerProfile} fallback={viewerUser?.email} className="h-8 w-8 shrink-0 text-xs" />
             <div
               className={`flex min-w-0 flex-1 items-center rounded-full border px-3 py-1.5 transition focus-within:border-cyan-300 ${
                 theme === "light"
