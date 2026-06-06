@@ -3,7 +3,6 @@ import { motion } from "framer-motion";
 import {
   Activity,
   AlertTriangle,
-  Award,
   Bookmark,
   Briefcase,
   Camera,
@@ -21,7 +20,6 @@ import {
   MessageSquare,
   Save,
   Share2,
-  ShieldCheck,
   Trash2,
   UserCheck,
   UserPlus,
@@ -36,6 +34,16 @@ import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
 import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  acceptConnectionRequest,
+  cancelConnectionRequest,
+  followBack,
+  loadConnectionState,
+  rejectConnectionRequest,
+  sendConnectionRequest,
+  unfollowUser,
+  type ConnectionState,
+} from "@/lib/connections";
 import { Profile, profileCompletion } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -93,7 +101,15 @@ type ProfileSlugUser = {
 };
 
 type SocialListMode = "teams" | "followers" | "following";
-type ProfileTab = "posts" | "projects" | "teams" | "achievements" | "activity";
+type ProfileTab = "posts" | "projects" | "teams" | "activity";
+
+type AvatarCropDraft = {
+  file: File;
+  url: string;
+  x: number;
+  y: number;
+  zoom: number;
+};
 
 function resolveProfileSlug(profile?: Partial<Profile> | null, user?: ProfileSlugUser | null) {
   const metadata = user?.user_metadata ?? {};
@@ -205,8 +221,16 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
   const [editOpen, setEditOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [isFollowing, setIsFollowing] = useState(false);
+  const [connectionState, setConnectionState] = useState<ConnectionState>({
+    status: "none",
+    isFollowing: false,
+    isFollower: false,
+    outgoingRequest: null,
+    incomingRequest: null,
+  });
   const [followLoading, setFollowLoading] = useState(false);
+  const [avatarCrop, setAvatarCrop] = useState<AvatarCropDraft | null>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
 
   const DRAFT_KEY = user ? `profile_draft_${user.id}` : "";
 
@@ -282,6 +306,12 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
   }, [profileUser, user?.id, DRAFT_KEY]);
 
   useEffect(() => {
+    return () => {
+      if (avatarCrop) URL.revokeObjectURL(avatarCrop.url);
+    };
+  }, [avatarCrop]);
+
+  useEffect(() => {
     if (!user || !formReady || !DRAFT_KEY || form.id !== user.id) return;
     const timer = setTimeout(() => {
       localStorage.setItem(DRAFT_KEY, JSON.stringify(form));
@@ -296,10 +326,7 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
       supabase.from("team_members").select("team_id").eq("user_id", targetUserId),
       (supabase as any).from("user_follows").select("follower_id").eq("following_id", targetUserId),
       (supabase as any).from("user_follows").select("following_id").eq("follower_id", targetUserId),
-      user?.id && user.id !== targetUserId
-        ? (supabase as any).from("user_follows").select("id").eq("follower_id", user.id).eq("following_id", targetUserId).maybeSingle()
-        : Promise.resolve({ data: null }),
-    ]).then(async ([memberships, followerRows, followingRows, followRow]) => {
+    ]).then(async ([memberships, followerRows, followingRows]) => {
       const teamIds = [...new Set(((memberships.data as Array<{ team_id: string }>) ?? []).map((item) => item.team_id))];
       const followerIds = [...new Set(((followerRows.data as Array<{ follower_id: string }>) ?? []).map((item) => item.follower_id))];
       const followingIds = [...new Set(((followingRows.data as Array<{ following_id: string }>) ?? []).map((item) => item.following_id))];
@@ -318,7 +345,29 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
         followers: followerIds.length,
         following: followingIds.length,
       });
-      setIsFollowing(Boolean(followRow.data));
+      if (user?.id && user.id !== targetUserId) {
+        loadConnectionState(user.id, targetUserId)
+          .then(setConnectionState)
+          .catch(() => {
+            const isFollowing = followerIds.includes(user.id);
+            const isFollower = followingIds.includes(user.id);
+            setConnectionState({
+              status: isFollowing && isFollower ? "connected" : isFollower ? "follow_back" : isFollowing ? "following" : "none",
+              isFollowing,
+              isFollower,
+              outgoingRequest: null,
+              incomingRequest: null,
+            });
+          });
+      } else {
+        setConnectionState({
+          status: "none",
+          isFollowing: false,
+          isFollower: false,
+          outgoingRequest: null,
+          incomingRequest: null,
+        });
+      }
     });
   }, [profileUser?.id, user?.id]);
 
@@ -406,57 +455,156 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
     toast.success("Link copied.");
   };
 
-  const toggleFollow = async () => {
+  const refreshConnection = async () => {
+    if (!user?.id || !profileUser?.id || user.id === profileUser.id) return;
+    const state = await loadConnectionState(user.id, profileUser.id);
+    setConnectionState(state);
+  };
+
+  const handleConnectAction = async (action: "connect" | "cancel" | "accept" | "reject" | "follow_back" | "unfollow") => {
     if (!user || !profileUser || isOwnProfile) return;
     setFollowLoading(true);
 
-    if (isFollowing) {
-      const { error } = await (supabase as any)
-        .from("user_follows")
-        .delete()
-        .eq("follower_id", user.id)
-        .eq("following_id", profileUser.id);
-      setFollowLoading(false);
-      if (error) {
-        toast.error(error.message);
+    try {
+      if (action === "connect") {
+        const result = await sendConnectionRequest(profile ?? { id: user.id, full_name: user.email }, profileUser);
+        if (result.error) {
+          toast.error(result.error.message);
+          return;
+        }
+        if ("reverse" in result && result.reverse) {
+          await refreshConnection();
+          toast.info("They already sent you a request. You can accept it now.");
+          return;
+        }
+        setConnectionState((current) => ({
+          ...current,
+          status: "request_sent",
+          outgoingRequest: (result.data as ConnectionState["outgoingRequest"]) ?? current.outgoingRequest,
+        }));
+        toast.success("Connection request sent.");
         return;
       }
-      setIsFollowing(false);
-      setSocialStats((current) => ({ ...current, followers: Math.max(0, current.followers - 1) }));
-      toast.success("Unfollowed.");
+
+      if (action === "cancel" && connectionState.outgoingRequest) {
+        const { error } = await cancelConnectionRequest(connectionState.outgoingRequest.id);
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        setConnectionState((current) => ({ ...current, status: "none", outgoingRequest: null }));
+        toast.success("Request cancelled.");
+        return;
+      }
+
+      if (action === "reject" && connectionState.incomingRequest) {
+        const { error } = await rejectConnectionRequest(connectionState.incomingRequest.id);
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        setConnectionState((current) => ({ ...current, status: "none", incomingRequest: null }));
+        toast.success("Request rejected.");
+        return;
+      }
+
+      if (action === "accept" && connectionState.incomingRequest) {
+        const { error } = await acceptConnectionRequest(connectionState.incomingRequest, profile ?? { id: user.id, full_name: user.email }, profileUser);
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        setConnectionState((current) => ({
+          ...current,
+          status: "follow_back",
+          isFollower: true,
+          incomingRequest: null,
+        }));
+        setSocialStats((current) => ({ ...current, following: current.following + 1 }));
+        toast.success("Connection request accepted.");
+        return;
+      }
+
+      if (action === "follow_back") {
+        const { error } = await followBack(profile ?? { id: user.id, full_name: user.email }, profileUser);
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        setConnectionState((current) => ({ ...current, status: "connected", isFollowing: true }));
+        setSocialStats((current) => ({ ...current, followers: current.followers + 1 }));
+        toast.success("Followed back.");
+        return;
+      }
+
+      if (action === "unfollow") {
+        const { error } = await unfollowUser(user.id, profileUser.id);
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        setConnectionState((current) => ({
+          ...current,
+          status: current.isFollower ? "follow_back" : "none",
+          isFollowing: false,
+        }));
+        setSocialStats((current) => ({ ...current, followers: Math.max(0, current.followers - 1) }));
+        toast.success("Unfollowed.");
+      }
+    } finally {
+      setFollowLoading(false);
+    }
+  };
+
+  const startAvatarCrop = (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose a JPG, PNG, or WEBP image.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error("Profile photo must be under 8 MB.");
       return;
     }
 
-    const { error } = await (supabase as any)
-      .from("user_follows")
-      .insert({ follower_id: user.id, following_id: profileUser.id });
-    setFollowLoading(false);
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-
-    setIsFollowing(true);
-    setSocialStats((current) => ({ ...current, followers: current.followers + 1 }));
-    await supabase.from("notifications").insert({
-      user_id: profileUser.id,
-      title: "New follower",
-      message: `${user.email} started following you.`,
+    setAvatarCrop((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return { file, url: URL.createObjectURL(file), x: 0, y: 0, zoom: 1 };
     });
-    toast.success(`Following ${profileUser.full_name || profileUser.username || "builder"}.`);
+  };
+
+  const cancelAvatarCrop = () => {
+    setAvatarCrop((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
+    });
   };
 
   const uploadAvatar = async (file: File) => {
     if (!user) return;
-    const path = `${user.id}/${Date.now()}-${file.name}`;
-    const { error } = await supabase.storage.from("avatars").upload(path, file, { upsert: true });
+    setAvatarUploading(true);
+    const safeName = file.name.replace(/[^a-z0-9_.-]/gi, "_");
+    const path = `${user.id}/${Date.now()}-${safeName}`;
+    const { error } = await supabase.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+    setAvatarUploading(false);
     if (error) {
       toast.error(error.message);
       return;
     }
     const { data } = supabase.storage.from("avatars").getPublicUrl(path);
     update("avatar_url", data.publicUrl);
+    window.dispatchEvent(new Event("profile_updated"));
     toast.success("Avatar uploaded. Save your profile to keep it.");
+  };
+
+  const applyAvatarCrop = async () => {
+    if (!avatarCrop) return;
+    try {
+      const cropped = await cropImageToSquareFile(avatarCrop);
+      await uploadAvatar(cropped);
+      cancelAvatarCrop();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not crop this image.");
+    }
   };
 
   const save = async () => {
@@ -564,7 +712,7 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
               <div className="mx-auto shrink-0 sm:mx-0">
                 <div className="rounded-full bg-white p-1.5 shadow-lg ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-700">
-                  <SafeAvatar profile={form as Profile} fallback={user?.email} className="h-24 w-24 text-3xl sm:h-28 sm:w-28" />
+                  <SafeAvatar profile={form as Profile} fallback={user?.email} previewable className="h-24 w-24 text-3xl sm:h-28 sm:w-28" />
                 </div>
               </div>
 
@@ -605,15 +753,53 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
                     </>
                   ) : (
                     <>
-                      <button
-                        type="button"
-                        onClick={toggleFollow}
-                        disabled={followLoading}
-                        className="profile-primary-button inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold shadow-sm transition disabled:opacity-60"
-                      >
-                        {isFollowing ? <UserCheck className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
-                        {followLoading ? "Saving..." : isFollowing ? "Following" : "Connect"}
-                      </button>
+                      {connectionState.status === "request_received" ? (
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <button
+                            type="button"
+                            onClick={() => handleConnectAction("accept")}
+                            disabled={followLoading}
+                            className="profile-primary-button inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold shadow-sm transition disabled:opacity-60"
+                          >
+                            <UserCheck className="h-4 w-4" />
+                            {followLoading ? "Saving..." : "Accept"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleConnectAction("reject")}
+                            disabled={followLoading}
+                            className="profile-secondary-button justify-center disabled:opacity-60"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (connectionState.status === "request_sent") void handleConnectAction("cancel");
+                            else if (connectionState.status === "follow_back") void handleConnectAction("follow_back");
+                            else if (connectionState.status === "connected") void handleConnectAction("unfollow");
+                            else if (connectionState.status === "following") void handleConnectAction("unfollow");
+                            else if (connectionState.status === "none") void handleConnectAction("connect");
+                          }}
+                          disabled={followLoading}
+                          className="profile-primary-button inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold shadow-sm transition disabled:opacity-70"
+                        >
+                          {connectionState.status === "none" ? <UserPlus className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
+                          {followLoading
+                            ? "Saving..."
+                            : connectionState.status === "request_sent"
+                              ? "Requested"
+                              : connectionState.status === "follow_back"
+                                ? "Follow Back"
+                                : connectionState.status === "connected"
+                                  ? "Connected"
+                                  : connectionState.status === "following"
+                                    ? "Following"
+                                    : "Connect"}
+                        </button>
+                      )}
                       <Link to="/messages" search={{ direct: profileUser.id } as never} className="profile-secondary-button justify-center"><MessageSquare className="h-4 w-4" /> Message</Link>
                       <button type="button" onClick={openShareModal} className="profile-secondary-button justify-center"><Share2 className="h-4 w-4" /> Share Profile</button>
                     </>
@@ -663,7 +849,7 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
 
         <section className="profile-card overflow-hidden p-0">
           <div className="flex overflow-x-auto border-b border-slate-200 px-2 dark:border-slate-700">
-            {(["posts", "projects", "teams", "achievements", "activity"] as const).map((tab) => (
+            {(["posts", "projects", "teams", "activity"] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -697,11 +883,10 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
         <ProfileCompletionCard completion={completion} skills={skills} form={form} />
         <ProfileSidebar
           profile={form}
-          socialStats={socialStats}
           followers={followers}
           followingProfiles={followingProfiles}
-          onFollowers={() => setListMode("followers")}
-          onFollowing={() => setListMode("following")}
+          currentUserId={user?.id}
+          viewedProfileId={profileUserId}
         />
       </aside>
 
@@ -724,13 +909,22 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
 
             <div className="max-h-[calc(92vh-76px)] overflow-y-auto p-5">
               <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
-                <SafeAvatar profile={form as Profile} fallback={user?.email} className="h-16 w-16 text-lg" />
+                <SafeAvatar profile={form as Profile} fallback={user?.email} previewable className="h-16 w-16 text-lg" />
                 <div>
                   <p className="font-bold text-slate-950 dark:text-slate-50">{displayName}</p>
                   <label className="mt-2 inline-flex cursor-pointer items-center gap-2 rounded-full border border-cyan-200 bg-white px-3 py-2 text-xs font-semibold text-cyan-700 transition hover:bg-cyan-50 dark:border-cyan-700 dark:bg-slate-900 dark:text-cyan-300 dark:hover:bg-cyan-300/10">
                     <Camera className="h-4 w-4" />
                     Change avatar
-                    <input type="file" accept="image/*" className="hidden" onChange={(event) => event.target.files?.[0] && uploadAvatar(event.target.files[0])} />
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.currentTarget.value = "";
+                        if (file) startAvatarCrop(file);
+                      }}
+                    />
                   </label>
                 </div>
               </div>
@@ -810,6 +1004,113 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
                   </button>
                 </div>
               </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {avatarCrop && (
+        <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/75 px-0 backdrop-blur-md sm:items-center sm:px-4" role="dialog" aria-modal="true" aria-label="Crop profile photo">
+          <motion.div
+            initial={{ opacity: 0, y: 24, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            className="w-full max-w-2xl rounded-t-3xl bg-white shadow-2xl dark:bg-slate-900 sm:rounded-3xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+              <div>
+                <h2 className="text-lg font-bold text-slate-950 dark:text-slate-50">Crop profile photo</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Move and zoom the image into the circle.</p>
+              </div>
+              <button type="button" onClick={cancelAvatarCrop} className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800" aria-label="Close crop photo">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="grid max-h-[calc(100svh-90px)] gap-5 overflow-y-auto p-5 md:grid-cols-[minmax(0,1fr)_180px]">
+              <div className="space-y-4">
+                <div className="relative mx-auto aspect-square w-full max-w-[420px] overflow-hidden rounded-3xl bg-slate-950">
+                  <img
+                    src={avatarCrop.url}
+                    alt="Selected profile photo"
+                    className="h-full w-full select-none object-cover"
+                    style={{
+                      transform: `translate(${avatarCrop.x}px, ${avatarCrop.y}px) scale(${avatarCrop.zoom})`,
+                    }}
+                    draggable={false}
+                  />
+                  <div className="pointer-events-none absolute inset-0 bg-black/35 [clip-path:polygon(0_0,100%_0,100%_100%,0_100%,0_0)]" />
+                  <div className="pointer-events-none absolute inset-[10%] rounded-full border-2 border-white shadow-[0_0_0_999px_rgba(0,0,0,0.42)]" />
+                </div>
+
+                <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+                  <label className="space-y-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    Zoom
+                    <input
+                      type="range"
+                      min="1"
+                      max="3"
+                      step="0.05"
+                      value={avatarCrop.zoom}
+                      onChange={(event) => setAvatarCrop((current) => current ? { ...current, zoom: Number(event.target.value) } : current)}
+                      className="w-full accent-cyan-700"
+                    />
+                  </label>
+                  <label className="space-y-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    Horizontal position
+                    <input
+                      type="range"
+                      min="-120"
+                      max="120"
+                      step="1"
+                      value={avatarCrop.x}
+                      onChange={(event) => setAvatarCrop((current) => current ? { ...current, x: Number(event.target.value) } : current)}
+                      className="w-full accent-cyan-700"
+                    />
+                  </label>
+                  <label className="space-y-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    Vertical position
+                    <input
+                      type="range"
+                      min="-120"
+                      max="120"
+                      step="1"
+                      value={avatarCrop.y}
+                      onChange={(event) => setAvatarCrop((current) => current ? { ...current, y: Number(event.target.value) } : current)}
+                      className="w-full accent-cyan-700"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center dark:border-slate-700 dark:bg-slate-800">
+                <div className="grid h-32 w-32 overflow-hidden rounded-full bg-slate-950">
+                  <img
+                    src={avatarCrop.url}
+                    alt="Circular crop preview"
+                    className="h-full w-full object-cover"
+                    style={{
+                      transform: `translate(${avatarCrop.x / 3}px, ${avatarCrop.y / 3}px) scale(${avatarCrop.zoom})`,
+                    }}
+                    draggable={false}
+                  />
+                </div>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Cropped photos are saved as a 512x512 square.</p>
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 p-5 dark:border-slate-700 sm:flex-row sm:justify-end">
+              <button type="button" onClick={cancelAvatarCrop} className="rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={applyAvatarCrop}
+                disabled={avatarUploading}
+                className="flex items-center justify-center gap-2 rounded-full bg-cyan-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:opacity-60 dark:bg-cyan-300 dark:text-slate-950 dark:hover:bg-cyan-200"
+              >
+                {avatarUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Apply crop
+              </button>
             </div>
           </motion.div>
         </div>
@@ -949,6 +1250,43 @@ function InfoTile({ label, value }: { label: string; value: string }) {
   );
 }
 
+async function cropImageToSquareFile(draft: AvatarCropDraft) {
+  const image = await loadImage(draft.url);
+  const size = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Your browser could not crop this image.");
+
+  context.fillStyle = "#0f172a";
+  context.fillRect(0, 0, size, size);
+
+  const baseScale = Math.max(size / image.naturalWidth, size / image.naturalHeight);
+  const scale = baseScale * draft.zoom;
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+  const previewToCanvas = size / 420;
+  const x = (size - width) / 2 + draft.x * previewToCanvas;
+  const y = (size - height) / 2 + draft.y * previewToCanvas;
+
+  context.drawImage(image, x, y, width, height);
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.92));
+  if (!blob) throw new Error("Could not prepare the cropped image.");
+  const originalName = draft.file.name.replace(/\.[^.]+$/, "");
+  return new File([blob], `${originalName || "profile-photo"}-cropped.webp`, { type: "image/webp" });
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not load this image."));
+    image.src = src;
+  });
+}
+
 function ProfileCompletionCard({ completion, skills, form }: { completion: number; skills: string[]; form: Partial<Profile> }) {
   const suggestions = [
     !skills.length ? "Add skills" : null,
@@ -1011,15 +1349,6 @@ function ProfileTabContent({
         {teams.map((team) => <ProjectCard key={team.id} team={team} />)}
       </div>
     ) : <EmptyState icon={Users} title="No teams yet" detail="Join or create a team to build your SyncUp presence." />;
-  }
-
-  if (activeTab === "achievements") {
-    return (
-      <div className="grid gap-4 sm:grid-cols-2">
-        <AchievementCard title="Builder profile created" detail="Your SyncUp professional identity is ready." icon={Award} />
-        <AchievementCard title="Reliability score" detail={`${form.reliability_score ?? 100}% community reliability`} icon={ShieldCheck} />
-      </div>
-    );
   }
 
   if (activeTab === "activity") {
@@ -1214,16 +1543,6 @@ function ProjectCard({ team }: { team: TeamSummary }) {
   );
 }
 
-function AchievementCard({ title, detail, icon: Icon }: { title: string; detail: string; icon: LucideIcon }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-      <Icon className="h-6 w-6 text-cyan-700 dark:text-cyan-300" />
-      <p className="mt-3 font-bold text-slate-950 dark:text-slate-50">{title}</p>
-      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{detail}</p>
-    </div>
-  );
-}
-
 function ActivityItem({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="flex gap-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
@@ -1267,25 +1586,29 @@ function EmptyState({ icon: Icon, title, detail }: { icon: LucideIcon; title: st
 
 function ProfileSidebar({
   profile,
-  socialStats,
   followers,
   followingProfiles,
-  onFollowers,
-  onFollowing,
+  currentUserId,
+  viewedProfileId,
 }: {
   profile: Partial<Profile>;
-  socialStats: { teams: number; followers: number; following: number };
   followers: Profile[];
   followingProfiles: Profile[];
-  onFollowers: () => void;
-  onFollowing: () => void;
+  currentUserId?: string;
+  viewedProfileId?: string;
 }) {
+  const suggestedBuilders = [...followers, ...followingProfiles].filter((person, index, people) => {
+    const key = person.id || person.username || person.email || `${person.full_name}-${person.avatar_url}`;
+    if (!key || person.id === currentUserId || person.id === viewedProfileId) return false;
+    return people.findIndex((item) => (item.id || item.username || item.email || `${item.full_name}-${item.avatar_url}`) === key) === index;
+  }).slice(0, 3);
+
   return (
     <>
       <section className="profile-card p-4">
         <h2 className="font-bold text-slate-950 dark:text-slate-50">Suggested builders</h2>
         <div className="mt-3 space-y-3">
-          {[...followers, ...followingProfiles].slice(0, 3).map((person) => (
+          {suggestedBuilders.map((person) => (
             <Link key={person.id} to="/profile/$username" params={{ username: person.username || person.id }} className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-slate-50 dark:hover:bg-slate-800">
               <SafeAvatar profile={person} className="h-10 w-10 text-xs" />
               <span className="min-w-0">
@@ -1294,7 +1617,7 @@ function ProfileSidebar({
               </span>
             </Link>
           ))}
-          {!followers.length && !followingProfiles.length && <p className="text-sm text-slate-500 dark:text-slate-400">Connect with builders to see suggestions here.</p>}
+          {!suggestedBuilders.length && <p className="text-sm text-slate-500 dark:text-slate-400">Connect with builders to see suggestions here.</p>}
         </div>
       </section>
 
@@ -1307,19 +1630,6 @@ function ProfileSidebar({
         </div>
       </section>
 
-      <section className="profile-card p-4">
-        <h2 className="font-bold text-slate-950 dark:text-slate-50">Network</h2>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button type="button" onClick={onFollowers} className="rounded-xl bg-slate-50 p-3 text-left transition hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700">
-            <p className="text-lg font-bold text-slate-950 dark:text-slate-50">{socialStats.followers}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Followers</p>
-          </button>
-          <button type="button" onClick={onFollowing} className="rounded-xl bg-slate-50 p-3 text-left transition hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700">
-            <p className="text-lg font-bold text-slate-950 dark:text-slate-50">{socialStats.following}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Following</p>
-          </button>
-        </div>
-      </section>
     </>
   );
 }

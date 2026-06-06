@@ -18,11 +18,13 @@ import {
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { acceptConnectionRequest, rejectConnectionRequest } from "@/lib/connections";
 import { profileCompletion } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
 import { BrandLogo } from "@/components/app/BrandLogo";
 import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { CursorGlow, FloatingParticles, GradientBlobs } from "@/components/landing/Background";
+import { MESSAGE_UNREAD_CHANGED_EVENT, countUnreadMessages } from "@/lib/message-unread";
 
 const productLinks = [
   { label: "Home", to: "/dashboard", icon: LayoutDashboard },
@@ -158,12 +160,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         .eq("recipient_id", user.id);
     }
 
-    let count = countUnreadLatestThreads(
-      ((directRows.data as UnreadBadgeMessage[]) ?? []),
-      user.id,
-      localReads,
-      (message) => `direct-${message.sender_id === user.id ? message.recipient_id : message.sender_id}`,
-    );
+    let count = countUnreadMessages(((directRows.data as UnreadBadgeMessage[]) ?? []), user.id, localReads);
 
     const leaderTeams = await supabase.from("teams").select("id").eq("leader_id", user.id);
     const leaderTeamIds = ((leaderTeams.data as Array<{ id: string }>) ?? []).map((team) => team.id);
@@ -187,12 +184,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           .select("id, request_id, sender_id, created_at")
           .in("request_id", requestIds);
       }
-      count += countUnreadLatestThreads(
-        ((requestMessages.data as UnreadBadgeMessage[]) ?? []),
-        user.id,
-        localReads,
-        (message) => `request-${message.request_id ?? message.id}`,
-      );
+      count += countUnreadMessages(((requestMessages.data as UnreadBadgeMessage[]) ?? []), user.id, localReads);
     }
 
     setMessageUnreadCount(count);
@@ -205,8 +197,8 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    window.addEventListener("syncup_message_reads_updated", loadMessageUnreadCount);
-    return () => window.removeEventListener("syncup_message_reads_updated", loadMessageUnreadCount);
+    window.addEventListener(MESSAGE_UNREAD_CHANGED_EVENT, loadMessageUnreadCount);
+    return () => window.removeEventListener(MESSAGE_UNREAD_CHANGED_EVENT, loadMessageUnreadCount);
   }, [user?.id]);
 
   useEffect(() => {
@@ -284,6 +276,66 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
     navigateToNotificationTarget(content.targetPath, navigate);
   };
 
+  const handleNotificationRequestAction = async (notification: Notification, action: "accept" | "reject") => {
+    if (!user) return;
+    const metadata = normalizeNotificationMetadata(notification.metadata);
+    const senderId =
+      notification.senderId ||
+      notification.sender_id ||
+      notification.actorId ||
+      notification.actor_id ||
+      metadata.senderId ||
+      metadata.sender_id;
+
+    if (!senderId) {
+      toast.error("Could not determine who sent this request.");
+      return;
+    }
+
+    const requestResult = await supabase
+      .from("connection_requests")
+      .select("*")
+      .eq("sender_id", senderId)
+      .eq("receiver_id", user.id)
+      .eq("status", "pending")
+      .maybeSingle();
+
+    if (requestResult.error) {
+      toast.error(requestResult.error.message);
+      return;
+    }
+
+    if (!requestResult.data) {
+      toast.error("This connection request is no longer pending.");
+      setNotifications((current) => current.map((item) => (item.id === notification.id ? { ...item, read: true } : item)));
+      return;
+    }
+
+    if (action === "accept") {
+      const senderProfile = await supabase.from("profiles").select("*").eq("id", senderId).maybeSingle();
+      const { error } = await acceptConnectionRequest(
+        requestResult.data,
+        { id: user.id, full_name: user.email },
+        senderProfile.data ?? { id: senderId, username: undefined, full_name: undefined, avatar_url: null },
+      );
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      toast.success("Connection request accepted.");
+    } else {
+      const { error } = await rejectConnectionRequest(requestResult.data.id);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      toast.success("Connection request rejected.");
+    }
+
+    setNotifications((current) => current.filter((item) => item.id !== notification.id));
+    await supabase.from("notifications").update({ read: true }).eq("id", notification.id);
+  };
+
   const acceptCookieNotice = () => {
     window.localStorage.setItem("syncup_cookie_notice", "accepted");
     setCookieNoticeOpen(false);
@@ -321,11 +373,6 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
                   <Icon className={`h-4 w-4 ${active ? "text-cyan-700 dark:text-cyan-300" : ""}`} />
                   <span>{link.label}</span>
                   {active && <span className="absolute inset-x-4 -bottom-[17px] h-0.5 rounded-full bg-cyan-700 dark:bg-cyan-300" />}
-                  {link.to === "/messages" && messageUnreadCount > 0 && (
-                    <span className="grid h-5 min-w-5 place-items-center rounded-full bg-cyan-700 px-1 text-[10px] font-bold text-white dark:bg-cyan-300 dark:text-slate-950">
-                      {messageUnreadCount}
-                    </span>
-                  )}
                 </Link>
               );
             })}
@@ -392,7 +439,13 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
             <div className="my-2 h-px bg-white/10" />
             <div className="max-h-80 overflow-y-auto">
               {notifications.length ? notifications.map((item) => (
-                <NotificationItem key={item.id} item={item} onOpen={() => handleNotificationClick(item)} />
+                <NotificationItem
+                  key={item.id}
+                  item={item}
+                  onOpen={() => handleNotificationClick(item)}
+                  onAccept={() => handleNotificationRequestAction(item, "accept")}
+                  onReject={() => handleNotificationRequestAction(item, "reject")}
+                />
               )) : (
                 <p className="px-3 py-8 text-center text-sm text-white/50">No notifications yet.</p>
               )}
@@ -430,11 +483,6 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
                 >
                   <Icon className="h-4 w-4 text-cyan-300" />
                   {link.label}
-                  {link.to === "/messages" && messageUnreadCount > 0 && (
-                    <span className="ml-auto grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19]">
-                      {messageUnreadCount}
-                    </span>
-                  )}
                 </Link>
               );
             })}
@@ -486,14 +534,24 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
 
       <section className={`relative z-10 ${
         isMessagesPage
-          ? "w-full px-4 pb-4 pt-3 sm:px-5 lg:px-6"
-          : "mx-auto max-w-[1200px] px-4 pb-16 pt-5 sm:px-6"
+          ? "mx-auto w-full max-w-[1440px] overflow-x-hidden px-4 pb-6 pt-4 sm:px-6 lg:px-8"
+          : "mx-auto w-full max-w-[1440px] overflow-x-hidden px-4 pb-16 pt-4 sm:px-5 lg:px-6"
       }`}>{children}</section>
     </main>
   );
 }
 
-function NotificationItem({ item, onOpen }: { item: Notification; onOpen: () => void }) {
+function NotificationItem({
+  item,
+  onOpen,
+  onAccept,
+  onReject,
+}: {
+  item: Notification;
+  onOpen: () => void;
+  onAccept?: () => void;
+  onReject?: () => void;
+}) {
   const content = getNotificationContent(item);
   const metadata = normalizeNotificationMetadata(item.metadata);
   const title = content.actorName;
@@ -525,24 +583,52 @@ function NotificationItem({ item, onOpen }: { item: Notification; onOpen: () => 
     );
   }
 
+  const isRequest = item.type === "connection_request" || metadata.type === "connection_request";
+
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group flex w-full items-start gap-3 border-b border-white/10 px-3 py-3 text-left transition last:border-b-0 hover:bg-white/[0.06]"
-    >
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-cyan-300/10 text-cyan-100 ring-1 ring-cyan-300/15">
-        <Bell className="h-4 w-4" />
-      </span>
-      <span className="min-w-0 flex-1 pt-0.5">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-semibold text-white">{title}</span>
-          <span className="shrink-0 text-[11px] text-white/35">{shortTime(item.created_at)}</span>
+    <div className="group border-b border-white/10 last:border-b-0 transition hover:bg-white/[0.06]">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full items-start gap-3 px-3 py-3 text-left"
+      >
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-cyan-300/10 text-cyan-100 ring-1 ring-cyan-300/15">
+          <Bell className="h-4 w-4" />
         </span>
-        {preview && <span className="mt-1 block line-clamp-2 text-xs leading-5 text-white/55">{preview}</span>}
-      </span>
-      {unread && <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-cyan-300" />}
-    </button>
+        <span className="min-w-0 flex-1 pt-0.5">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold text-white">{title}</span>
+            <span className="shrink-0 text-[11px] text-white/35">{shortTime(item.created_at)}</span>
+          </span>
+          {preview && <span className="mt-1 block line-clamp-2 text-xs leading-5 text-white/55">{preview}</span>}
+        </span>
+        {unread && <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-cyan-300" />}
+      </button>
+      {isRequest && (onAccept || onReject) && (
+        <div className="flex flex-wrap gap-2 px-3 pb-3 pt-1">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAccept?.();
+            }}
+            className="rounded-full border border-cyan-300/40 bg-cyan-300 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-cyan-200"
+          >
+            Accept
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onReject?.();
+            }}
+            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
+          >
+            Reject
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -583,6 +669,39 @@ function getNotificationContent(notification: Notification) {
         "Open message",
       targetPath: normalizeMessageTargetPath(targetPath, senderId),
       isDirectMessage: true,
+    };
+  }
+
+  if (notification.type === "connection_request" || metadata.type === "connection_request") {
+    return {
+      actorName: getNotificationActorName(notification, metadata),
+      actorAvatar: getNotificationActorAvatar(notification, metadata),
+      actionText: "sent you a connection request",
+      preview: notification.message || "Open profile to respond",
+      targetPath: notification.targetPath || notification.target_path || metadata.targetPath || metadata.target_path || "/profile",
+      isDirectMessage: false,
+    };
+  }
+
+  if (notification.type === "connection_accepted" || metadata.type === "connection_accepted") {
+    return {
+      actorName: getNotificationActorName(notification, metadata),
+      actorAvatar: getNotificationActorAvatar(notification, metadata),
+      actionText: "accepted your connection request",
+      preview: notification.message || "Open profile",
+      targetPath: notification.targetPath || notification.target_path || metadata.targetPath || metadata.target_path || "/profile",
+      isDirectMessage: false,
+    };
+  }
+
+  if (notification.type === "follow_back" || metadata.type === "follow_back") {
+    return {
+      actorName: getNotificationActorName(notification, metadata),
+      actorAvatar: getNotificationActorAvatar(notification, metadata),
+      actionText: "followed you back",
+      preview: notification.message || "Open profile",
+      targetPath: notification.targetPath || notification.target_path || metadata.targetPath || metadata.target_path || "/profile",
+      isDirectMessage: false,
     };
   }
 
@@ -741,38 +860,6 @@ type UnreadBadgeMessage = {
   deleted_at?: string | null;
   created_at?: string | null;
 };
-
-function countUnreadLatestThreads(
-  rows: UnreadBadgeMessage[],
-  userId: string,
-  localReads: Set<string>,
-  getThreadKey: (message: UnreadBadgeMessage) => string,
-) {
-  const latestByThread = new Map<string, UnreadBadgeMessage>();
-
-  rows
-    .filter((message) => !message.deleted_for_everyone && !message.deleted_at)
-    .forEach((message) => {
-      const key = getThreadKey(message);
-      if (!key || key.endsWith("undefined") || key.endsWith("null")) return;
-      const current = latestByThread.get(key);
-      if (!current || timestampValue(message.created_at) >= timestampValue(current.created_at)) {
-        latestByThread.set(key, message);
-      }
-    });
-
-  return [...latestByThread.values()].filter((message) => {
-    if (message.sender_id === userId) return false;
-    if (localReads.has(message.id)) return false;
-    if ((message.read_by ?? []).includes(userId)) return false;
-    return !message.read;
-  }).length;
-}
-
-function timestampValue(value?: string | null) {
-  const time = value ? new Date(value).getTime() : 0;
-  return Number.isFinite(time) ? time : 0;
-}
 
 function readLocalMessageReads(userId: string) {
   if (typeof window === "undefined") return new Set<string>();

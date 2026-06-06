@@ -32,6 +32,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Profile } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
 import { directMessageNotification, insertNotification } from "@/lib/notifications";
+import { getUnreadMessagesCount, isUnreadMessage, notifyUnreadMessagesChanged } from "@/lib/message-unread";
 
 export const Route = createFileRoute("/messages")({
   head: () => ({ meta: [{ title: "Messages | SyncUp" }] }),
@@ -563,19 +564,18 @@ function MessagesPage() {
     if (!user || message.sender_id === user.id || message.id.startsWith("temp-")) return;
     const table = message.request_id ? "join_request_messages" : "direct_messages";
     const readBy = Array.from(new Set([...(message.read_by ?? []), user.id]));
+    saveLocalReadFallback(user.id, message.id);
     const result = await (supabase as any)
       .from(table)
       .update(message.request_id ? { read_by: readBy } : { read: true, read_by: readBy })
       .eq("id", message.id);
-    if (!result.error && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("syncup_message_reads_updated"));
-    }
+    if (!result.error) notifyUnreadMessagesChanged();
     if (result.error && isMissingMessageMetadata(result.error)) {
       saveLocalReadFallback(user.id, message.id);
       if (!message.request_id) {
         await (supabase as any).from("direct_messages").update({ read: true }).eq("id", message.id);
       }
-      if (typeof window !== "undefined") window.dispatchEvent(new Event("syncup_message_reads_updated"));
+      notifyUnreadMessagesChanged();
     }
   };
 
@@ -631,12 +631,13 @@ function MessagesPage() {
     if (!user) return;
     const unread = thread.messages.filter((message) => isUnread(message, user.id) && !message.id.endsWith("-initial"));
     if (!unread.length) return;
+    unread.forEach((message) => saveLocalReadFallback(user.id, message.id));
     setThreads((current) => current.map((item) => item.id === thread.id ? {
       ...item,
       unreadCount: 0,
       messages: item.messages.map((message) => ({ ...message, read: true, read_by: Array.from(new Set([...(message.read_by ?? []), user.id])) })),
     } : item));
-    if (typeof window !== "undefined") window.dispatchEvent(new Event("syncup_message_reads_updated"));
+    notifyUnreadMessagesChanged();
 
     await Promise.all(unread.map((message) => {
       const table = thread.type === "direct" ? "direct_messages" : "join_request_messages";
@@ -935,7 +936,7 @@ function MessagesPage() {
   };
 
   const activeSubmit = editing ? saveEdit : sendMessage;
-  const unreadTotal = threads.reduce((sum, thread) => sum + thread.unreadCount, 0);
+  const unreadTotal = getUnreadMessagesCount(threads);
   const filterCounts = {
     all: threads.length,
     direct: threads.filter((thread) => thread.type === "direct").length,
@@ -962,21 +963,20 @@ function MessagesPage() {
   }, []);
 
   return (
-    <section className="flex h-[calc(100svh-5.75rem)] w-full min-h-0 flex-col gap-4 overflow-hidden">
-      <div className="glass-strong neon-border shrink-0 rounded-2xl px-4 py-3 sm:px-6 sm:py-4">
+    <section className="mx-auto flex h-[calc(100svh-6.25rem)] w-full max-w-[1440px] min-w-0 flex-col gap-5 overflow-hidden md:min-h-[600px]">
+      <div className="syncup-card shrink-0 rounded-3xl px-5 py-4 sm:px-6">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div>
-            <h1 className="flex items-center gap-3 text-2xl font-bold sm:text-3xl">
-              <MessageSquare className="h-6 w-6 text-cyan-300 sm:h-7 sm:w-7" />
+            <h1 className="flex items-center gap-3 text-2xl font-bold text-slate-950 dark:text-slate-50">
+              <MessageSquare className="h-6 w-6 text-cyan-700 dark:text-cyan-300" />
               Messages
-              {unreadTotal > 0 && <span className="rounded-full bg-cyan-300 px-2.5 py-1 text-xs font-bold text-[#0B0F19]">{unreadTotal}</span>}
             </h1>
-            <p className="mt-1 text-sm text-white/55 sm:text-base">Direct messages and team request conversations.</p>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Direct messages and team request conversations.</p>
           </div>
           <button
             onClick={toggleSound}
             className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-              soundEnabled ? "border-cyan-300/30 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10"
+              soundEnabled ? "border-cyan-200 bg-cyan-50 text-cyan-800 dark:border-cyan-300/30 dark:bg-cyan-300/10 dark:text-cyan-100" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10"
             }`}
           >
             {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
@@ -985,19 +985,19 @@ function MessagesPage() {
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 min-w-0 gap-4 overflow-hidden md:grid-cols-[340px_minmax(0,1fr)] lg:grid-cols-[380px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
-        <aside className="glass-strong flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl">
-          <div className="shrink-0 border-b border-white/10 p-3 sm:p-4">
+      <div className="grid min-h-0 min-w-0 flex-1 gap-5 overflow-hidden md:grid-cols-[320px_minmax(0,1fr)] lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+        <aside className="syncup-card flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-3xl">
+          <div className="shrink-0 border-b border-slate-200 p-3 sm:p-4 dark:border-slate-700">
             <div className="relative">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-white/35" />
+              <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400 dark:text-white/35" />
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-cyan-300"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-cyan-600 focus:bg-white dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-white/40 dark:focus:border-cyan-300"
                 placeholder="Search people, messages, teams, requests..."
               />
             </div>
-            <div className="mt-4 grid grid-cols-4 gap-1 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px] font-semibold sm:text-xs">
+            <div className="mt-3 grid grid-cols-4 gap-1 rounded-2xl border border-slate-200 bg-slate-100 p-1 text-[11px] font-semibold dark:border-white/10 dark:bg-white/5 sm:text-xs">
               {([
                 ["all", "All"],
                 ["direct", "Direct"],
@@ -1007,15 +1007,15 @@ function MessagesPage() {
                 <button
                   key={key}
                   onClick={() => setFilter(key)}
-                  className={`rounded-lg px-2 py-2 transition ${filter === key ? "bg-cyan-300 text-[#0B0F19]" : "text-white/55 hover:bg-white/10 hover:text-white"}`}
+                  className={`rounded-xl px-2 py-2 transition ${filter === key ? "bg-white text-slate-950 shadow-sm dark:bg-cyan-300 dark:text-[#0B0F19]" : "text-slate-600 hover:bg-white hover:text-slate-950 dark:text-white/55 dark:hover:bg-white/10 dark:hover:text-white"}`}
                 >
-                  {label}{filterCounts[key] ? ` ${filterCounts[key]}` : ""}
+                  {label}{key !== "unread" && filterCounts[key] ? ` ${filterCounts[key]}` : ""}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="messages-scroll min-h-0 flex-1 space-y-2 overflow-y-auto p-3 sm:p-4">
+          <div className="messages-scroll min-h-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto p-3 sm:p-4">
             {loading ? (
               <ThreadSkeleton />
             ) : visibleThreads.length ? (
@@ -1038,7 +1038,7 @@ function MessagesPage() {
           </div>
         </aside>
 
-        <section className="glass-strong hidden h-full min-h-0 min-w-0 overflow-hidden rounded-2xl md:flex">
+        <section className="syncup-card hidden h-full min-h-0 min-w-0 overflow-hidden rounded-3xl md:flex">
           {selected ? (
             <Conversation
               selected={selected}
@@ -1100,7 +1100,7 @@ function MessagesPage() {
       </div>
 
       {compactChat && chatOpen && selected && (
-        <div className="message-mobile-sheet fixed inset-x-0 bottom-0 top-16 z-[45] overflow-hidden md:hidden">
+        <div className="message-mobile-sheet fixed inset-x-0 bottom-0 top-16 z-[45] overflow-hidden bg-white dark:bg-[#0B0F19] md:hidden">
           <Conversation
             selected={selected}
             userId={user?.id}
@@ -1263,67 +1263,67 @@ function Conversation({
         toast.info("Attachments are not enabled for this workspace yet.");
       }}
     >
-      <div className="shrink-0 flex min-w-0 items-center justify-between gap-2 border-b border-white/10 p-3 sm:gap-3 sm:p-4">
+      <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white p-3 dark:border-white/10 dark:bg-[#101827] sm:gap-3 sm:p-4">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {onBack && (
-            <button onClick={onBack} className="shrink-0 rounded-xl p-2 hover:bg-white/10">
+            <button onClick={onBack} className="shrink-0 rounded-xl p-2 text-slate-600 hover:bg-slate-100 dark:text-white dark:hover:bg-white/10">
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
           <AvatarButton thread={selected} profile={otherProfile} onOpen={onProfileOpen} />
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <h2 className="truncate text-base font-semibold sm:text-xl">{selected.title}</h2>
+              <h2 className="truncate text-base font-semibold text-slate-950 dark:text-white sm:text-lg">{selected.title}</h2>
               {selected.type === "request" && <StatusBadge status={requestStatus} />}
             </div>
-            <p className="truncate text-xs text-white/45">
+            <p className="truncate text-xs text-slate-500 dark:text-white/45">
               {selected.type === "request"
                 ? `${otherProfile?.full_name || otherProfile?.username || "Applicant"} - ${selected.teamName || "Team request"}`
                 : otherProfile?.role || otherProfile?.college || "Direct message"}
             </p>
             {selected.type === "direct" && selectedTyping.length > 0 && (
-              <span className="flex items-center gap-2 text-xs text-cyan-200">
+              <span className="flex items-center gap-2 text-xs text-cyan-700 dark:text-cyan-200">
                 {selectedTyping.join(", ")} {selectedTyping.length === 1 ? "is" : "are"} typing <TypingDots />
               </span>
             )}
           </div>
         </div>
         <div className="flex shrink-0 gap-1.5 sm:gap-2">
-          <button onClick={onMute} className={`rounded-xl border border-white/10 p-2 hover:bg-white/10 ${muted ? "bg-cyan-300/15 text-cyan-100" : "bg-white/5"}`} title="Mute">
+          <button onClick={onMute} className={`rounded-full border p-2 transition ${muted ? "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-300/30 dark:bg-cyan-300/15 dark:text-cyan-100" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"}`} title="Mute">
             <BellOff className="h-4 w-4" />
           </button>
-          <button onClick={onDeleteConversation} className="rounded-xl border border-red-400/25 bg-red-500/10 p-2 text-red-100 hover:bg-red-500/15" title="Delete chat">
+          <button onClick={onDeleteConversation} className="rounded-full border border-red-200 bg-red-50 p-2 text-red-600 transition hover:bg-red-100 dark:border-red-400/25 dark:bg-red-500/10 dark:text-red-100 dark:hover:bg-red-500/15" title="Delete chat">
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
       </div>
 
       {selected.type === "request" && (
-        <div className="shrink-0 border-b border-white/10 bg-cyan-300/5 p-3 sm:p-4">
-          <div className="flex flex-col gap-3 rounded-2xl border border-cyan-300/15 bg-white/[0.03] p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="shrink-0 border-b border-slate-200 bg-cyan-50/60 p-3 dark:border-white/10 dark:bg-cyan-300/5 sm:p-4">
+          <div className="flex flex-col gap-3 rounded-2xl border border-cyan-200 bg-white p-4 dark:border-cyan-300/15 dark:bg-white/[0.03] sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="font-semibold">Team join request</p>
+                <p className="font-semibold text-slate-950 dark:text-white">Team join request</p>
                 <StatusBadge status={requestStatus} />
               </div>
-              <p className="mt-1 text-sm text-white/55">
+              <p className="mt-1 text-sm text-slate-600 dark:text-white/55">
                 {otherProfile?.full_name || otherProfile?.username || "Applicant"} requested to join {selected.teamName || selected.title}.
               </p>
-              {selected.requestMessage && <p className="mt-2 line-clamp-2 text-sm text-white/65">"{selected.requestMessage}"</p>}
+              {selected.requestMessage && <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-white/65">"{selected.requestMessage}"</p>}
               {(selected.requestSkills ?? []).length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {selected.requestSkills?.slice(0, 5).map((skill) => (
-                    <span key={skill} className="rounded-full bg-cyan-300/15 px-2.5 py-1 text-[11px] font-semibold text-cyan-100">{skill}</span>
+                    <span key={skill} className="rounded-full bg-cyan-100 px-2.5 py-1 text-[11px] font-semibold text-cyan-800 dark:bg-cyan-300/15 dark:text-cyan-100">{skill}</span>
                   ))}
                 </div>
               )}
             </div>
             {canDecideRequest && (
               <div className="flex shrink-0 gap-2">
-                <button onClick={onRejectRequest} className="rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/15">
+                <button onClick={onRejectRequest} className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-100 dark:border-red-400/25 dark:bg-red-500/10 dark:text-red-100 dark:hover:bg-red-500/15">
                   Reject
                 </button>
-                <button onClick={onAcceptRequest} className="rounded-xl bg-cyan-300 px-4 py-2 text-sm font-semibold text-[#0B0F19] hover:bg-cyan-200">
+                <button onClick={onAcceptRequest} className="rounded-xl bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800 dark:bg-cyan-300 dark:text-[#0B0F19] dark:hover:bg-cyan-200">
                   Accept
                 </button>
               </div>
@@ -1332,7 +1332,7 @@ function Conversation({
         </div>
       )}
 
-      <div ref={scrollRef} onScroll={onScroll} className="messages-scroll min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4">
+      <div ref={scrollRef} onScroll={onScroll} className="messages-scroll min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto bg-slate-50/70 p-3 dark:bg-[#0B0F19]/45 sm:p-4">
         {selected.messages.length ? selected.messages.map((message, index) => {
           const prev = selected.messages[index - 1];
           const showDate = !prev || dateLabel(prev.created_at) !== dateLabel(message.created_at);
@@ -1368,7 +1368,7 @@ function Conversation({
       </div>
 
       {showJump && (
-        <button onClick={onScrollBottom} className="absolute bottom-24 right-6 grid h-10 w-10 place-items-center rounded-full bg-cyan-300 text-[#0B0F19] shadow-lg">
+        <button onClick={onScrollBottom} className="absolute bottom-24 right-6 grid h-10 w-10 place-items-center rounded-full bg-cyan-700 text-white shadow-lg dark:bg-cyan-300 dark:text-[#0B0F19]">
           <ArrowDown className="h-4 w-4" />
         </button>
       )}
@@ -1448,31 +1448,31 @@ function MessageBubble(props: {
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={`group flex gap-2 sm:gap-3 ${own ? "justify-end" : "justify-start"} ${grouped ? "mt-1" : "mt-3"}`}>
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={`group flex gap-2 sm:gap-3 ${own ? "justify-end" : "justify-start"} ${grouped ? "mt-1" : "mt-2.5"}`}>
       {!own && !grouped ? (
         <button onClick={() => profile && props.onProfileOpen(profile)} className="mt-1 shrink-0">
           <SafeAvatar profile={profile ?? ({ full_name: thread.title, username: null } as Profile)} className="h-9 w-9 text-[11px]" />
         </button>
       ) : !own ? <span className="h-9 w-9 shrink-0" /> : null}
-      <div className={`relative min-w-0 ${sharedPost ? "w-fit max-w-[85%] sm:max-w-[680px]" : "max-w-[85%] sm:max-w-[620px]"} ${own ? "ml-auto" : "mr-auto"}`}>
-        <div className={`relative rounded-2xl px-3 py-2.5 text-sm shadow-sm sm:px-4 sm:py-3 ${own ? "message-bubble-own bg-cyan-300/20 text-cyan-50" : "message-bubble-other bg-white/8 text-white/75"} ${grouped ? own ? "rounded-tr-md" : "rounded-tl-md" : ""}`}>
-          <button ref={actionButtonRef} onClick={() => props.onMenu(openMenu ? null : message.id)} className="message-action-button absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-lg border border-white/10 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100" title="Message actions">
+      <div className={`relative min-w-0 ${sharedPost ? "w-fit max-w-[85%] sm:max-w-[680px] lg:max-w-[70%]" : "max-w-[85%] sm:max-w-[70%]"} ${own ? "ml-auto" : "mr-auto"}`}>
+        <div className={`relative rounded-2xl px-3 py-2 text-sm shadow-sm sm:px-4 sm:py-2.5 ${own ? "message-bubble-own bg-cyan-700 text-white dark:bg-cyan-300/20 dark:text-cyan-50" : "message-bubble-other border border-slate-200 bg-white text-slate-800 dark:border-transparent dark:bg-white/8 dark:text-white/75"} ${grouped ? own ? "rounded-tr-md" : "rounded-tl-md" : ""}`}>
+          <button ref={actionButtonRef} onClick={() => props.onMenu(openMenu ? null : message.id)} className="message-action-button absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-lg border border-slate-200 bg-white/80 text-slate-500 opacity-100 transition hover:bg-slate-100 dark:border-white/10 dark:bg-transparent dark:text-white sm:opacity-0 sm:group-hover:opacity-100" title="Message actions">
             <MoreVertical className="h-4 w-4" />
           </button>
           {reply && (
-            <button onClick={() => props.onScrollMessage(reply.id)} className="mb-2 block w-full rounded-lg border-l-2 border-cyan-300 bg-black/15 px-3 py-2 text-left text-xs text-white/55">
+            <button onClick={() => props.onScrollMessage(reply.id)} className="mb-2 block w-full rounded-lg border-l-2 border-cyan-500 bg-black/10 px-3 py-2 text-left text-xs text-slate-600 dark:border-cyan-300 dark:bg-black/15 dark:text-white/55">
               Replying to: {reply.message || attachmentSubtitle(reply)}
             </button>
           )}
           {deleted ? (
-            <p className="italic text-white/45">This message was deleted</p>
+            <p className="italic opacity-65">This message was deleted</p>
           ) : sharedPost ? (
             <SharedPostPreview sharedPost={sharedPost} query={query} />
           ) : message.message && (
             <p className="whitespace-pre-wrap break-words pr-6 [overflow-wrap:anywhere] sm:pr-0">{highlight(message.message, query)}</p>
           )}
           {!deleted && <Attachments message={message} />}
-          <div className={`mt-2 flex items-center gap-2 text-[10px] text-white/35 ${own ? "justify-end" : "justify-start"}`}>
+          <div className={`mt-1.5 flex items-center gap-2 text-[10px] opacity-65 ${own ? "justify-end" : "justify-start"}`}>
             {message.edited_at && <span>edited</span>}
             <span>{smartTime(message.created_at)}</span>
             {own && <ReadReceipt message={message} />}
@@ -1510,19 +1510,19 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
   onRemoveAttachment: (index: number) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="message-composer shrink-0 border-t border-white/10 p-3 backdrop-blur-xl sm:p-4">
+    <form onSubmit={onSubmit} className="message-composer shrink-0 border-t border-slate-200 bg-white p-3 dark:border-white/10 dark:bg-[#101827] sm:p-4">
       {(editing || replyTo) && (
-        <div className="mb-3 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm">
-          <span className="truncate text-white/60">{editing ? "Editing message" : `Replying to: ${replyTo?.message || attachmentSubtitle(replyTo)}`}</span>
-          <button type="button" onClick={onCancel} className="rounded-lg p-1 hover:bg-white/10"><X className="h-4 w-4" /></button>
+        <div className="mb-3 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5">
+          <span className="truncate text-slate-600 dark:text-white/60">{editing ? "Editing message" : `Replying to: ${replyTo?.message || attachmentSubtitle(replyTo)}`}</span>
+          <button type="button" onClick={onCancel} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100 dark:text-white dark:hover:bg-white/10"><X className="h-4 w-4" /></button>
         </div>
       )}
       {attachments.length > 0 && (
         <div className="mb-3 flex gap-2 overflow-x-auto">
           {attachments.map((item, index) => (
-            <div key={`${item.file.name}-${index}`} className="relative shrink-0 rounded-xl border border-white/10 bg-white/5 p-2">
-              {item.previewUrl && item.file.type.startsWith("image/") ? <img src={item.previewUrl} alt="" className="h-20 w-24 rounded-lg object-cover" /> : <FileText className="h-10 w-10 text-cyan-300" />}
-              <p className="mt-1 max-w-24 truncate text-[10px] text-white/55">{item.file.name}</p>
+            <div key={`${item.file.name}-${index}`} className="relative shrink-0 rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-white/10 dark:bg-white/5">
+              {item.previewUrl && item.file.type.startsWith("image/") ? <img src={item.previewUrl} alt="" className="h-20 w-24 rounded-lg object-cover" /> : <FileText className="h-10 w-10 text-cyan-700 dark:text-cyan-300" />}
+              <p className="mt-1 max-w-24 truncate text-[10px] text-slate-500 dark:text-white/55">{item.file.name}</p>
               <button type="button" onClick={() => onRemoveAttachment(index)} className="absolute -right-2 -top-2 rounded-full bg-red-500 p-1"><X className="h-3 w-3" /></button>
             </div>
           ))}
@@ -1539,10 +1539,10 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
               event.currentTarget.form?.requestSubmit();
             }
           }}
-          className="max-h-32 min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none transition focus:border-cyan-300 sm:min-h-12 sm:px-4 sm:py-3"
+          className="max-h-32 min-h-11 min-w-0 flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-cyan-600 focus:bg-white dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-white/40 dark:focus:border-cyan-300 sm:min-h-12 sm:px-4 sm:py-3"
           placeholder="Write a message..."
         />
-        <button disabled={sending || (!text.trim() && !attachments.length)} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-sm font-semibold disabled:opacity-60 sm:flex sm:h-12 sm:w-auto sm:gap-2 sm:px-5">
+        <button disabled={sending || (!text.trim() && !attachments.length)} className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-cyan-700 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gradient-to-r dark:from-blue-500 dark:to-purple-500 sm:flex sm:h-12 sm:w-auto sm:gap-2 sm:px-5">
           {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           <span className="hidden sm:inline">{editing ? "Save" : "Send"}</span>
         </button>
@@ -1553,7 +1553,7 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
 
 function ThreadCard({ thread, active, typingNames, muted, onOpen }: { thread: Thread; active: boolean; typingNames: string[]; muted: boolean; onOpen: () => void }) {
   return (
-    <button onClick={onOpen} className={`w-full overflow-hidden rounded-2xl border p-3 text-left transition sm:p-4 ${active ? "border-cyan-300/50 bg-cyan-300/10" : thread.unreadCount ? "border-cyan-300/30 bg-cyan-300/5" : "border-white/10 bg-white/5 hover:bg-white/10"}`}>
+    <button onClick={onOpen} className={`w-full overflow-hidden rounded-2xl border p-3 text-left transition ${active ? "border-cyan-300 bg-cyan-50 shadow-sm dark:border-cyan-300/50 dark:bg-cyan-300/10" : thread.unreadCount ? "border-cyan-200 bg-cyan-50/50 dark:border-cyan-300/30 dark:bg-cyan-300/5" : "border-slate-200 bg-white hover:border-cyan-200 hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"}`}>
       <div className="flex items-center gap-3">
         <span className="relative h-10 w-10 shrink-0 sm:h-11 sm:w-11">
           <SafeAvatar
@@ -1564,21 +1564,21 @@ function ThreadCard({ thread, active, typingNames, muted, onOpen }: { thread: Th
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center justify-between gap-2">
-            <span className="truncate font-semibold">{thread.title}</span>
-            {thread.unreadCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-cyan-300 px-1 text-[10px] font-bold text-[#0B0F19]">{thread.unreadCount}</span>}
+            <span className="truncate font-semibold text-slate-950 dark:text-white">{thread.title}</span>
+            {thread.unreadCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-cyan-700 px-1 text-[10px] font-bold text-white dark:bg-cyan-300 dark:text-[#0B0F19]">{thread.unreadCount}</span>}
           </span>
           <span className="mt-0.5 flex items-center gap-1.5">
-            <span className="rounded-full bg-white/8 px-2 py-0.5 text-[10px] font-semibold text-white/45">
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-white/8 dark:text-white/45">
               {thread.type === "direct" ? "Direct" : "Team request"}
             </span>
             {thread.type === "request" && thread.requestStatus && <StatusBadge status={thread.requestStatus} />}
           </span>
-          <span className={`block truncate text-xs ${typingNames.length ? "text-cyan-200" : "text-white/50"}`}>
+          <span className={`block truncate text-xs ${typingNames.length ? "text-cyan-700 dark:text-cyan-200" : "text-slate-500 dark:text-white/50"}`}>
             {typingNames.length ? `${typingNames.slice(0, 2).join(", ")} typing...` : thread.subtitle}
           </span>
         </span>
       </div>
-      <div className="mt-2 flex items-center justify-between text-[11px] text-white/35">
+      <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400 dark:text-white/35">
         <span>{smartDateTime(thread.updatedAt)}</span>
         {muted && <BellOff className="h-3.5 w-3.5" />}
       </div>
@@ -1601,7 +1601,7 @@ function AvatarButton({ thread, profile, onOpen }: { thread: Thread; profile?: P
 function ProfileDrawer({ profile, threads, onClose }: { profile: Profile; threads: Thread[]; onClose: () => void }) {
   const sharedThreads = threads.filter((thread) => thread.profileId === profile.id);
   return (
-    <motion.aside initial={{ x: 380 }} animate={{ x: 0 }} className="message-profile-drawer fixed bottom-0 right-0 top-0 z-[100] w-full max-w-sm border-l border-white/10 p-5 shadow-2xl backdrop-blur-xl">
+    <motion.aside initial={{ x: 380 }} animate={{ x: 0 }} className="message-profile-drawer fixed bottom-0 right-0 top-0 z-[100] w-full max-w-sm border-l border-slate-200 bg-white p-5 text-slate-950 shadow-2xl dark:border-white/10 dark:bg-[#0B0F19] dark:text-white">
       <div className="flex justify-end">
         <button onClick={onClose} className="rounded-xl p-2 hover:bg-white/10"><X className="h-5 w-5" /></button>
       </div>
@@ -1610,18 +1610,18 @@ function ProfileDrawer({ profile, threads, onClose }: { profile: Profile; thread
         <h2 className="mt-4 text-2xl font-bold">{profile.full_name || profile.username || "SyncUp user"}</h2>
         <p className="text-sm text-cyan-200">@{profile.username || "profile"}</p>
       </div>
-      <p className="mt-5 rounded-2xl bg-white/5 p-4 text-sm leading-6 text-white/60">{profile.bio || "No bio added yet."}</p>
+      <p className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm leading-6 text-slate-600 dark:bg-white/5 dark:text-white/60">{profile.bio || "No bio added yet."}</p>
       <div className="mt-5">
         <p className="text-xs font-semibold text-white/45">Skills</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {(profile.skills ?? []).length ? profile.skills?.map((skill) => <span key={skill} className="rounded-full bg-cyan-300/15 px-3 py-1 text-xs text-cyan-100">{skill}</span>) : <span className="text-sm text-white/45">No skills listed.</span>}
         </div>
       </div>
-      <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
         <p className="text-sm font-semibold">Recent activity</p>
         <p className="mt-2 text-sm text-white/55">{sharedThreads.reduce((sum, thread) => sum + thread.messages.length, 0)} messages in this inbox.</p>
       </div>
-      <Link to="/profiles/$id" params={{ id: profile.id }} className="mt-5 flex justify-center rounded-xl bg-cyan-300 px-4 py-3 text-sm font-semibold text-[#0B0F19]">
+      <Link to="/profiles/$id" params={{ id: profile.id }} className="mt-5 flex justify-center rounded-xl bg-cyan-700 px-4 py-3 text-sm font-semibold text-white dark:bg-cyan-300 dark:text-[#0B0F19]">
         Open full profile
       </Link>
     </motion.aside>
@@ -1639,7 +1639,7 @@ function Attachments({ message }: { message: MessageRow }) {
         if (type.startsWith("image/")) return <a key={url} href={url} target="_blank" rel="noreferrer"><img src={url} alt={name} className="max-h-72 rounded-xl object-cover" /></a>;
         if (type.startsWith("video/")) return <video key={url} src={url} controls className="max-h-72 rounded-xl" />;
         return (
-          <a key={url} href={url} download className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/15 px-3 py-2 text-xs hover:bg-white/10">
+          <a key={url} href={url} download className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs hover:bg-slate-100 dark:border-white/10 dark:bg-black/15 dark:hover:bg-white/10">
             {type === "application/pdf" ? <FileText className="h-4 w-4 text-red-200" /> : <Download className="h-4 w-4 text-cyan-200" />}
             <span className="truncate">{name}</span>
           </a>
@@ -1653,10 +1653,10 @@ function SharedPostPreview({ sharedPost, query }: { sharedPost: SharedPostMessag
   return (
     <div className="space-y-3 pr-6 sm:pr-0">
       <div className="space-y-0.5">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-cyan-100/70">Shared a SyncUp post</p>
-        <p className="text-sm font-semibold text-white/85">from {sharedPost.author}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-cyan-700 dark:text-cyan-100/70">Shared a SyncUp post</p>
+        <p className="text-sm font-semibold text-slate-800 dark:text-white/85">from {sharedPost.author}</p>
       </div>
-      <div className="rounded-xl border border-white/10 bg-black/15 p-3 text-sm leading-relaxed text-white/80 shadow-inner sm:p-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-3 text-sm leading-relaxed text-slate-800 shadow-inner dark:border-white/10 dark:bg-black/15 dark:text-white/80 sm:p-4">
         <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{highlight(sharedPost.content, query)}</p>
       </div>
     </div>
@@ -1668,8 +1668,8 @@ function ReadReceipt({ message }: { message: MessageRow }) {
   if (message.delivery_status === "sending") return <span title="Sending">Sending</span>;
   const readCount = (message.read_by ?? []).filter((id) => id !== message.sender_id).length;
   if (readCount > 0 || message.read) return <span title={`${readCount || 1} read`}><CheckCheck className="h-3.5 w-3.5 text-cyan-200" /></span>;
-  if (!message.id.startsWith("temp-")) return <span title="Delivered"><CheckCheck className="h-3.5 w-3.5 text-white/45" /></span>;
-  return <span title="Sent"><Check className="h-3.5 w-3.5 text-white/45" /></span>;
+  if (!message.id.startsWith("temp-")) return <span title="Delivered"><CheckCheck className="h-3.5 w-3.5 opacity-60" /></span>;
+  return <span title="Sent"><Check className="h-3.5 w-3.5 opacity-60" /></span>;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -1691,24 +1691,24 @@ function TypingDots() {
 }
 
 function DateSeparator({ label }: { label: string }) {
-  return <div className="my-4 flex items-center gap-3"><span className="h-px flex-1 bg-white/10" /><span className="rounded-full bg-white/5 px-3 py-1 text-xs text-white/45">{label}</span><span className="h-px flex-1 bg-white/10" /></div>;
+  return <div className="my-4 flex items-center gap-3"><span className="h-px flex-1 bg-slate-200 dark:bg-white/10" /><span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500 shadow-sm dark:bg-white/5 dark:text-white/45">{label}</span><span className="h-px flex-1 bg-slate-200 dark:bg-white/10" /></div>;
 }
 
 function NoChatSelected() {
   return (
     <div className="grid w-full place-items-center p-10 text-center">
-      <div className="grid h-28 w-28 place-items-center rounded-full bg-cyan-300/10">
-        <MessageSquare className="h-12 w-12 text-cyan-200" />
+      <div className="grid h-24 w-24 place-items-center rounded-full bg-cyan-50 dark:bg-cyan-300/10">
+        <MessageSquare className="h-10 w-10 text-cyan-700 dark:text-cyan-200" />
       </div>
-      <h2 className="mt-5 text-2xl font-bold">Select a conversation to start messaging.</h2>
-      <p className="mt-2 max-w-sm text-sm text-white/50">Choose a profile chat or team request thread from your inbox.</p>
-      <Link to="/discover" className="mt-5 rounded-xl bg-cyan-300 px-5 py-3 text-sm font-semibold text-[#0B0F19]">Find builders</Link>
+      <h2 className="mt-5 text-2xl font-bold text-slate-950 dark:text-white">Select a conversation to start messaging.</h2>
+      <p className="mt-2 max-w-sm text-sm text-slate-500 dark:text-white/50">Choose a profile chat or team request thread from your inbox.</p>
+      <Link to="/discover" className="mt-5 rounded-xl bg-cyan-700 px-5 py-3 text-sm font-semibold text-white dark:bg-cyan-300 dark:text-[#0B0F19]">Find builders</Link>
     </div>
   );
 }
 
 function NoMessages() {
-  return <div className="grid h-full place-items-center rounded-2xl bg-white/5 p-8 text-center text-sm text-white/45">No messages yet. Start the conversation.</div>;
+  return <div className="grid h-full place-items-center rounded-2xl bg-white p-8 text-center text-sm text-slate-500 dark:bg-white/5 dark:text-white/45">No messages yet. Start the conversation.</div>;
 }
 
 function EmptyInbox({ filter = "all", query = "" }: { filter?: InboxFilter; query?: string }) {
@@ -1721,11 +1721,11 @@ function EmptyInbox({ filter = "all", query = "" }: { filter?: InboxFilter; quer
         : filter === "direct"
           ? "No direct messages yet."
           : "No conversations yet. Open a profile and send a message.";
-  return <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-white/55">{copy}</div>;
+  return <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-white/15 dark:bg-white/5 dark:text-white/55">{copy}</div>;
 }
 
 function ThreadSkeleton() {
-  return <div className="space-y-3">{[1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-2xl bg-white/5" />)}</div>;
+  return <div className="space-y-3">{[1, 2, 3].map((item) => <div key={item} className="h-20 animate-pulse rounded-2xl bg-slate-100 dark:bg-white/5" />)}</div>;
 }
 
 function MenuButton({ icon: Icon, label, danger, onClick }: { icon: typeof Reply; label: string; danger?: boolean; onClick: () => void }) {
@@ -1803,9 +1803,7 @@ function isVisibleFor(userId: string) {
 }
 
 function isUnread(message: MessageRow, userId: string) {
-  if (message.deleted_for_everyone || message.deleted_at) return false;
-  if (message.sender_id === userId) return false;
-  return !(message.read_by ?? []).includes(userId) && !message.read;
+  return isUnreadMessage(message, userId);
 }
 
 function parseSharedPostMessage(value?: string | null): SharedPostMessage | null {
@@ -1878,7 +1876,7 @@ function saveLocalReadFallback(userId: string, messageId: string) {
   const current = readLocalReadFallback(userId);
   current.add(messageId);
   window.localStorage.setItem(`syncup_local_reads_${userId}`, JSON.stringify([...current]));
-  window.dispatchEvent(new Event("syncup_message_reads_updated"));
+  notifyUnreadMessagesChanged();
 }
 
 function applyLocalReadFallback(message: MessageRow, fallback: Set<string>, userId: string) {
