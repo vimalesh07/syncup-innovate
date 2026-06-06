@@ -1,14 +1,32 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Ban, Flag, Heart, MessageCircle, MoreVertical, Send, Share2, Trash2, Users, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Ban,
+  Bookmark,
+  CalendarDays,
+  Flag,
+  Heart,
+  MapPin,
+  MessageCircle,
+  MoreVertical,
+  Send,
+  Share2,
+  Trash2,
+  Trophy,
+  UserPlus,
+  Users,
+  X,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
+import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { supabase } from "@/integrations/supabase/client";
-import { Profile, initials } from "@/lib/auth";
+import { Profile, profileCompletion } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
 import { notifyFollowers } from "@/lib/social";
+import { directMessageNotification, insertNotification } from "@/lib/notifications";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Home | SyncUp" }] }),
@@ -131,7 +149,14 @@ function HomeFeed() {
     const commenterIds = [...new Set(comments.map((comment) => comment.user_id))];
     const commenterRows = commenterIds.length ? await supabase.from("profiles").select("*").in("id", commenterIds) : { data: [] };
 
-    const profileMap = new Map([...(profileRows.data as Profile[] ?? []), ...(commenterRows.data as Profile[] ?? [])].map((item) => [item.id, item]));
+    const profileMap = new Map(
+      [...(profileRows.data as Profile[] ?? []), ...(commenterRows.data as Profile[] ?? [])]
+        .filter((item) => item?.id)
+        .map((item) => {
+          const normalizedProfile = normalizeFeedProfile(item);
+          return [normalizedProfile.id, normalizedProfile] as const;
+        }),
+    );
     const likes = (likeRows.data as Array<{ post_id: string; user_id: string }>) ?? [];
     const shares = (shareRows.data as Array<{ post_id: string }>) ?? [];
 
@@ -165,10 +190,17 @@ function HomeFeed() {
         return map;
       }, new Map<string, string[]>());
 
-      setShareTargets(((memberProfiles.data as Profile[]) ?? []).map((item) => ({
-        ...item,
-        teamNames: memberTeamMap.get(item.id) ?? [],
-      })));
+      setShareTargets(
+        ((memberProfiles.data as Profile[]) ?? [])
+          .filter((item) => item?.id)
+          .map((item) => {
+            const normalizedProfile = normalizeFeedProfile(item);
+            return {
+              ...normalizedProfile,
+              teamNames: memberTeamMap.get(normalizedProfile.id) ?? [],
+            };
+          }),
+      );
     } else {
       setShareTargets([]);
     }
@@ -276,13 +308,23 @@ function HomeFeed() {
     }
 
     const followingIds = new Set(((followingResult.data as Array<{ following_id: string }>) ?? []).map((row) => row.following_id));
-    const profileMap = new Map(((profileResult.data as Profile[]) ?? []).map((item) => [item.id, item]));
+    const profileMap = new Map(
+      ((profileResult.data as Profile[]) ?? [])
+        .filter((item) => item?.id)
+        .map((item) => {
+          const normalizedProfile = normalizeFeedProfile(item);
+          return [normalizedProfile.id, normalizedProfile] as const;
+        }),
+    );
 
     setLikedUsers(
       likedUserIds
         .map((id) => profileMap.get(id))
         .filter(Boolean)
-        .map((item) => ({ ...(item as Profile), following: followingIds.has((item as Profile).id) })),
+        .map((item) => {
+          const normalizedProfile = normalizeFeedProfile(item as Profile);
+          return { ...normalizedProfile, following: followingIds.has(normalizedProfile.id) };
+        }),
     );
     setLikesLoading(false);
   };
@@ -390,36 +432,71 @@ function HomeFeed() {
       toast.error(error.message);
       return;
     }
-    await supabase.from("notifications").insert({
-      user_id: target.id,
-      title: "Post shared with you",
-      message: `${profile?.full_name || profile?.username || user.email} shared a post to your messages.`,
-    });
+    await insertNotification(directMessageNotification({
+      userId: target.id,
+      senderId: user.id,
+      receiverId: target.id,
+      senderName: profile?.full_name || profile?.username || user.email || "SyncUp user",
+      senderAvatar: profile?.avatar_url ?? null,
+      conversationId: `direct-${user.id}`,
+      messagePreview: message,
+    }));
     toast.success(`Post shared to ${target.full_name || target.username || "profile"}'s DM.`);
     setPostToShare(null);
     await loadHome();
   };
 
-  const composerPlaceholder = useMemo(() => (
-    "Example: We need a UI/UX designer for a hackathon team this weekend. DM me if you can join."
-  ), []);
-
   return (
-    <div className="grid gap-6 xl:grid-cols-[1fr_0.38fr]">
-      <section className="space-y-5">
-        <div className="glass-strong neon-border rounded-2xl p-6">
-          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+    <div className="dashboard-shell grid min-w-0 gap-5 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(600px,680px)_300px]">
+      <aside className="hidden space-y-4 lg:block">
+        <section className="syncup-card overflow-hidden p-0">
+          <div className="px-4 py-4">
             <div>
-              <h1 className="text-3xl font-bold">Home</h1>
-              <p className="mt-2 text-white/55">Posts from builders, teams, and hackathon collaborators.</p>
+              <SafeAvatar profile={profile} fallback={user?.email} className="h-20 w-20 border-4 border-white text-xl shadow-sm dark:border-slate-800" />
             </div>
-            <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-white/5 p-1 text-sm">
+            <h2 className="mt-3 text-base font-bold text-slate-950 dark:text-slate-50">{profile?.full_name || profile?.username || "SyncUp user"}</h2>
+            <p className="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-400">{profile?.role || profile?.bio || "Student builder"}</p>
+            <p className="mt-2 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+              <MapPin className="h-3.5 w-3.5" />
+              {profile?.college || "College or location not added"}
+            </p>
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/70">
+              <div className="flex items-center justify-between text-xs font-semibold">
+                <span className="text-slate-600 dark:text-slate-300">Profile strength</span>
+                <span className="text-cyan-700 dark:text-cyan-300">{profileCompletion(profile)}%</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                <div className="h-full rounded-full bg-cyan-700 dark:bg-cyan-300" style={{ width: `${profileCompletion(profile)}%` }} />
+              </div>
+            </div>
+            <div className="mt-4 divide-y divide-slate-100 text-sm dark:divide-slate-700">
+              <SidebarStat label="Teams" value={teams.length} />
+            </div>
+          </div>
+        </section>
+
+        <section className="syncup-card p-3">
+          <Link to="/saved-competitions" className="syncup-shortcut"><Bookmark className="h-4 w-4" /> Saved</Link>
+          <Link to="/my-teams" className="syncup-shortcut"><Users className="h-4 w-4" /> Teams</Link>
+          <Link to="/discover" className="syncup-shortcut"><Trophy className="h-4 w-4" /> Competitions</Link>
+          <Link to="/discover" className="syncup-shortcut"><CalendarDays className="h-4 w-4" /> Events</Link>
+        </section>
+      </aside>
+
+      <section className="min-w-0 space-y-4">
+        <div className="syncup-card p-4">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <div>
+              <h1 className="text-xl font-bold text-slate-950 dark:text-slate-50">Home</h1>
+              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Posts from builders, teams, and collaborators.</p>
+            </div>
+            <div className="grid grid-cols-2 rounded-full border border-slate-200 bg-slate-100 p-1 text-sm dark:border-slate-700 dark:bg-slate-800">
               {(["all", "following"] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setFeedMode(mode)}
-                  className={`rounded-lg px-4 py-2 font-semibold capitalize transition ${
-                    feedMode === mode ? "bg-cyan-300 text-[#0B0F19]" : "text-white/60 hover:bg-white/10 hover:text-white"
+                  className={`rounded-full px-4 py-2 font-semibold capitalize transition ${
+                    feedMode === mode ? "bg-white text-slate-950 shadow-sm dark:bg-slate-700 dark:text-white" : "text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
                   }`}
                 >
                   {mode}
@@ -429,27 +506,21 @@ function HomeFeed() {
           </div>
         </div>
 
-        <form onSubmit={createPost} className="glass-strong rounded-2xl p-5">
-          <div className="flex gap-3">
-            {profile?.avatar_url ? (
-              <img src={profile.avatar_url} alt="" className="h-11 w-11 rounded-xl object-cover" />
-            ) : (
-              <span className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-                {initials(profile, user?.email)}
-              </span>
-            )}
+        <form onSubmit={createPost} className="syncup-card p-4">
+          <div className="flex items-start gap-3">
+            <SafeAvatar profile={profile} fallback={user?.email} className="h-12 w-12" />
             <textarea
               value={postText}
               onChange={(event) => setPostText(event.target.value)}
               rows={3}
               maxLength={700}
-              className="min-h-24 flex-1 resize-none rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
-              placeholder={composerPlaceholder}
+              className="min-h-20 flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-cyan-700 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50 dark:placeholder:text-slate-400 dark:focus:border-cyan-300"
+              placeholder="Start a post"
             />
           </div>
-          <div className="mt-4 flex items-center justify-between gap-3">
-            <p className="text-xs text-white/40">{postText.length}/700</p>
-            <button disabled={posting || !postText.trim()} className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold disabled:opacity-60">
+          <div className="mt-3 flex items-center justify-end gap-3 border-t border-slate-100 pt-3 dark:border-slate-700">
+            <p className="text-xs text-slate-500 dark:text-slate-400">{postText.length}/700</p>
+            <button disabled={posting || !postText.trim()} className="inline-flex items-center gap-2 rounded-full bg-cyan-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:opacity-60 dark:bg-cyan-300 dark:text-slate-950 dark:hover:bg-cyan-200">
               <Send className="h-4 w-4" />
               Post
             </button>
@@ -457,7 +528,7 @@ function HomeFeed() {
         </form>
 
         {loading ? (
-          <div className="glass-strong rounded-2xl p-10 text-center text-white/55">Loading posts...</div>
+          <div className="syncup-card p-10 text-center text-sm text-slate-500 dark:text-slate-400">Loading posts...</div>
         ) : posts.length ? posts.map((post) => (
           <PostCard
             key={post.id}
@@ -474,29 +545,43 @@ function HomeFeed() {
             currentUserId={user?.id}
           />
         )) : (
-          <div className="glass-strong rounded-2xl border border-dashed border-white/15 p-10 text-center text-white/55">
+          <div className="syncup-card border-dashed p-10 text-center text-sm text-slate-500 dark:text-slate-400">
             {feedMode === "following" ? "No posts from people you follow yet. Follow builders from their profiles to build your feed." : "No posts yet. Share the first team invite or hackathon update."}
           </div>
         )}
       </section>
 
-      <aside className="space-y-5">
-        <section className="glass-strong rounded-2xl p-5">
-          <h2 className="flex items-center gap-2 text-lg font-semibold"><Users className="h-5 w-5 text-cyan-300" /> Your Teams</h2>
-          <div className="mt-4 space-y-3">
-            {teams.length ? teams.map((team) => (
-              <Link key={team.id} to="/teams/$id" params={{ id: team.id }} className="block rounded-xl bg-white/5 p-4 hover:bg-white/10">
-                <p className="font-semibold">{team.team_name}</p>
-                <p className="text-xs text-white/50">{team.team_purpose || "Team"} · {team.project_title || "Project pending"}</p>
+      <aside className="hidden space-y-4 xl:block">
+        <section className="syncup-card p-4">
+          <h2 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-slate-50"><Users className="h-5 w-5 text-cyan-700 dark:text-cyan-300" /> Your Teams</h2>
+          <div className="mt-3 space-y-2">
+            {teams.length ? teams.slice(0, 4).map((team) => (
+              <Link key={team.id} to="/teams/$id" params={{ id: team.id }} className="block rounded-xl border border-slate-100 p-3 transition hover:border-cyan-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-cyan-700 dark:hover:bg-slate-800">
+                <p className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{team.team_name}</p>
+                <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{team.team_purpose || "Team"} · {team.project_title || "Project pending"}</p>
               </Link>
             )) : (
-              <Link to="/my-teams" className="block rounded-xl bg-white/5 p-4 text-sm text-white/55 transition hover:bg-white/10 hover:text-cyan-200">
+              <Link to="/my-teams" className="block rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500 transition hover:border-cyan-200 hover:text-cyan-700 dark:border-slate-700 dark:text-slate-400 dark:hover:border-cyan-700 dark:hover:text-cyan-300">
                 Join or create a team to see it here.
               </Link>
             )}
           </div>
         </section>
-        <SignalScout />
+        <section className="syncup-card p-4">
+          <h2 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-slate-50"><UserPlus className="h-5 w-5 text-cyan-700 dark:text-cyan-300" /> Suggested Builders</h2>
+          <div className="mt-3 space-y-3">
+            {shareTargets.slice(0, 3).map((target) => (
+              <Link key={target.id} to="/profiles/$id" params={{ id: target.id }} className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-slate-50 dark:hover:bg-slate-800">
+                <SafeAvatar profile={target} className="h-10 w-10 text-xs" />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{target.full_name || target.username || "SyncUp user"}</span>
+                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{target.role || target.teamNames[0] || "Builder"}</span>
+                </span>
+              </Link>
+            ))}
+            {!shareTargets.length && <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400">Collaborator suggestions appear after you join teams.</p>}
+          </div>
+        </section>
       </aside>
 
       {postToShare && (
@@ -525,13 +610,7 @@ function HomeFeed() {
                   className="flex w-full items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:bg-white/10 disabled:opacity-60"
                 >
                   <div className="flex min-w-0 items-center gap-3">
-                    {target.avatar_url ? (
-                      <img src={target.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
-                    ) : (
-                      <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-                        {initials(target)}
-                      </span>
-                    )}
+                    <SafeAvatar profile={target} className="h-12 w-12" />
                     <div className="min-w-0">
                       <p className="truncate font-semibold">{target.full_name || target.username || "SyncUp user"}</p>
                       <p className="truncate text-xs text-white/50">{target.teamNames.join(", ") || target.role || "Team member"}</p>
@@ -619,13 +698,7 @@ function HomeFeed() {
               ) : likedUsers.length ? likedUsers.map((likedUser) => (
                 <div key={likedUser.id} className="flex items-center gap-3 rounded-2xl p-3 transition hover:bg-white/5">
                   <Link to="/profiles/$id" params={{ id: likedUser.id }} onClick={() => setLikesPost(null)} className="flex min-w-0 flex-1 items-center gap-3">
-                    {likedUser.avatar_url ? (
-                      <img src={likedUser.avatar_url} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover ring-1 ring-white/10" />
-                    ) : (
-                      <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 font-bold text-white ring-1 ring-white/10">
-                        {initials(likedUser)}
-                      </span>
-                    )}
+                    <SafeAvatar profile={likedUser} className="h-12 w-12" />
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-semibold">
                         {likedUser.full_name || likedUser.username || "SyncUp user"}
@@ -658,6 +731,61 @@ function HomeFeed() {
         </div>
       )}
     </div>
+  );
+}
+
+function normalizeFeedProfile(profile: Profile): Profile {
+  return {
+    ...profile,
+    full_name: textOrNull(profile.full_name),
+    username: textOrNull(profile.username),
+    avatar_url: textOrNull(profile.avatar_url),
+    bio: textOrNull(profile.bio),
+    college: textOrNull(profile.college),
+    role: textOrNull(profile.role),
+    github_url: textOrNull(profile.github_url),
+    linkedin_url: textOrNull(profile.linkedin_url),
+    portfolio_url: textOrNull(profile.portfolio_url),
+    skills: normalizeFeedSkills(profile.skills),
+    reliability_score: Number.isFinite(Number(profile.reliability_score)) ? Number(profile.reliability_score) : 100,
+  };
+}
+
+function normalizeFeedSkills(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((skill) => `${skill}`.trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((skill) => skill.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function textOrNull(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function SidebarStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between py-2">
+      <span className="text-slate-600 dark:text-slate-400">{label}</span>
+      <span className="font-bold text-cyan-700 dark:text-cyan-300">{value}</span>
+    </div>
+  );
+}
+
+function PostText({ content }: { content: string }) {
+  const parts = content.split(/(#[\w-]+)/g);
+  return (
+    <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700 dark:text-slate-300">
+      {parts.map((part, index) => (
+        part.startsWith("#")
+          ? <span key={`${part}-${index}`} className="font-semibold text-cyan-700 dark:text-cyan-300">{part}</span>
+          : <span key={`${part}-${index}`}>{part}</span>
+      ))}
+    </p>
   );
 }
 
@@ -732,23 +860,17 @@ function PostCard({
   };
 
   return (
-    <motion.article initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong rounded-2xl p-5">
+    <motion.article initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="syncup-card p-4 transition hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
-      <Link to="/profiles/$id" params={{ id: post.user_id }} className="flex items-center gap-3 rounded-xl transition hover:bg-white/5">
-        {post.profile?.avatar_url ? (
-          <img src={post.profile.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
-        ) : (
-          <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-            {initials(post.profile ?? null)}
-          </span>
-        )}
-        <div>
-          <p className="font-semibold">{post.profile?.full_name || post.profile?.username || "SyncUp user"}</p>
-          <p className="text-xs text-white/45">{post.profile?.role || "Builder"} · {new Date(post.created_at).toLocaleString()}</p>
+      <Link to="/profiles/$id" params={{ id: post.user_id }} className="flex min-w-0 items-center gap-3 rounded-xl transition hover:bg-slate-50 dark:hover:bg-slate-800">
+        <SafeAvatar profile={post.profile} className="h-12 w-12" />
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-slate-950 dark:text-slate-50">{post.profile?.full_name || post.profile?.username || "SyncUp user"}</p>
+          <p className="truncate text-xs text-slate-500 dark:text-slate-400">{post.profile?.role || "Builder"} · {timeAgo(post.created_at)}</p>
         </div>
       </Link>
         <div className="relative">
-          <button onClick={() => setMenuOpen((current) => !current)} className="rounded-xl p-2 text-white/60 hover:bg-white/10" title="Post options">
+          <button onClick={() => setMenuOpen((current) => !current)} className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white" title="Post options">
             <MoreVertical className="h-4 w-4" />
           </button>
           {menuOpen && (
@@ -783,10 +905,10 @@ function PostCard({
           )}
         </div>
       </div>
-      <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-white/75">{post.content}</p>
-      <div className="mt-5 flex flex-wrap items-center gap-2 border-y border-white/10 py-3">
-        <div className={`flex items-center gap-1 rounded-xl px-3 py-2 text-sm transition hover:bg-white/10 ${post.liked ? "text-red-200" : "text-white/65"}`}>
-          <button onClick={onLike} className="flex items-center gap-2 transition hover:text-red-200">
+      <PostText content={post.content} />
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2 dark:border-slate-700">
+        <div className={`flex items-center gap-1 rounded-full px-3 py-2 text-sm font-semibold transition hover:bg-slate-100 dark:hover:bg-slate-800 ${post.liked ? "text-red-600 dark:text-red-300" : "text-slate-600 dark:text-slate-400"}`}>
+          <button onClick={onLike} className="flex items-center gap-2 transition hover:text-red-600 dark:hover:text-red-300">
             <Heart className={`h-4 w-4 ${post.liked ? "fill-current" : ""}`} />
             <span>Like</span>
           </button>
@@ -794,20 +916,24 @@ function PostCard({
             <button
               type="button"
               onClick={onOpenLikes}
-              className="rounded-md px-1 font-semibold transition hover:text-cyan-200"
+              className="rounded-md px-1 font-semibold transition hover:text-cyan-700 dark:hover:text-cyan-300"
               title="See who liked this post"
             >
               {post.likes}
             </button>
           )}
         </div>
-        <button onClick={toggleComments} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/65 transition hover:bg-white/10">
+        <button onClick={toggleComments} className="flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
           <MessageCircle className="h-4 w-4" />
           Comment {post.comments.length ? post.comments.length : ""}
         </button>
-        <button onClick={onShare} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/65 transition hover:bg-white/10">
+        <button onClick={onShare} className="flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
           <Share2 className="h-4 w-4" />
           Share {post.shares ? post.shares : ""}
+        </button>
+        <button type="button" className="flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+          <Bookmark className="h-4 w-4" />
+          Save
         </button>
       </div>
       {commentsOpen && (
@@ -820,13 +946,7 @@ function PostCard({
             return (
               <div key={comment.id} className="group flex items-start gap-2.5">
                 <Link to="/profiles/$id" params={{ id: comment.user_id }} className="shrink-0">
-                  {comment.profile?.avatar_url ? (
-                    <img src={comment.profile.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-white/10" />
-                  ) : (
-                    <span className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-xs font-bold text-white ring-1 ring-white/10">
-                      {initials(comment.profile ?? null)}
-                    </span>
-                  )}
+                  <SafeAvatar profile={comment.profile} className="h-8 w-8 text-xs" />
                 </Link>
                 <div className="min-w-0 flex-1">
                   <div
@@ -860,13 +980,7 @@ function PostCard({
           })}
 
           <form onSubmit={onComment} className="flex items-center gap-2.5 pt-1">
-            {viewerProfile?.avatar_url ? (
-              <img src={viewerProfile.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-white/10" />
-            ) : (
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-xs font-bold text-white ring-1 ring-white/10">
-                {initials(viewerProfile, viewerUser?.email)}
-              </span>
-            )}
+            <SafeAvatar profile={viewerProfile} fallback={viewerUser?.email} className="h-8 w-8 text-xs" />
             <div
               className={`flex min-w-0 flex-1 items-center rounded-full border px-3 py-1.5 transition focus-within:border-cyan-300 ${
                 theme === "light"
@@ -939,9 +1053,9 @@ function SignalScout() {
   const distance = guess ? Math.abs(target.x - guess.x) + Math.abs(target.y - guess.y) : null;
 
   return (
-    <section className="glass-strong rounded-2xl p-5">
-      <h2 className="text-lg font-semibold">Signal Scout</h2>
-      <p className="mt-1 text-sm text-white/55">{distance === 0 ? "Perfect lock." : distance === null ? "Find the hidden signal." : `${distance} steps away.`}</p>
+    <section className="syncup-card p-4">
+      <h2 className="text-base font-bold text-slate-950 dark:text-slate-50">Signal Scout</h2>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{distance === 0 ? "Perfect lock." : distance === null ? "Find the hidden signal." : `${distance} steps away.`}</p>
       <div className="mt-4 grid grid-cols-5 gap-2">
         {Array.from({ length: 25 }).map((_, index) => {
           const x = index % 5;
@@ -952,7 +1066,7 @@ function SignalScout() {
               key={`${x}-${y}`}
               onClick={() => setGuess({ x, y })}
               onDoubleClick={() => setTarget(newTarget())}
-              className={`aspect-square rounded-lg border text-xs font-bold ${active ? "border-cyan-300 bg-cyan-300/20" : "border-white/10 bg-white/5 hover:bg-white/10"}`}
+              className={`aspect-square rounded-lg border text-xs font-bold transition ${active ? "border-cyan-600 bg-cyan-50 text-cyan-800 dark:border-cyan-300 dark:bg-cyan-300/15 dark:text-cyan-100" : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"}`}
             >
               {active ? (distance === 0 ? "ON" : distance) : ""}
             </button>

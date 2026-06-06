@@ -15,16 +15,19 @@ alter table public.user_follows enable row level security;
 grant select, insert, delete on public.user_follows to authenticated;
 grant all on public.user_follows to service_role;
 
+drop policy if exists "Authenticated users can read follows" on public.user_follows;
 create policy "Authenticated users can read follows"
   on public.user_follows for select
   to authenticated
   using (true);
 
+drop policy if exists "Users can follow" on public.user_follows;
 create policy "Users can follow"
   on public.user_follows for insert
   to authenticated
   with check (auth.uid() = follower_id and follower_id <> following_id);
 
+drop policy if exists "Users can unfollow" on public.user_follows;
 create policy "Users can unfollow"
   on public.user_follows for delete
   to authenticated

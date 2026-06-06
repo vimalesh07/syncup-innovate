@@ -25,6 +25,8 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as TeamsIdRouteImport } from './routes/teams.$id'
 import { Route as ProfilesIdRouteImport } from './routes/profiles.$id'
+import { Route as ProfileUsernameRouteImport } from './routes/profile.$username'
+import { Route as MessagesConversationIdRouteImport } from './routes/messages.$conversationId'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 
 const SignupRoute = SignupRouteImport.update({
@@ -107,6 +109,16 @@ const ProfilesIdRoute = ProfilesIdRouteImport.update({
   path: '/profiles/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProfileUsernameRoute = ProfileUsernameRouteImport.update({
+  id: '/$username',
+  path: '/$username',
+  getParentRoute: () => ProfileRoute,
+} as any)
+const MessagesConversationIdRoute = MessagesConversationIdRouteImport.update({
+  id: '/$conversationId',
+  path: '/$conversationId',
+  getParentRoute: () => MessagesRoute,
+} as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/callback',
   path: '/callback',
@@ -121,14 +133,16 @@ export interface FileRoutesByFullPath {
   '/discover': typeof DiscoverRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
-  '/messages': typeof MessagesRoute
+  '/messages': typeof MessagesRouteWithChildren
   '/my-teams': typeof MyTeamsRoute
-  '/profile': typeof ProfileRoute
+  '/profile': typeof ProfileRouteWithChildren
   '/reset-password': typeof ResetPasswordRoute
   '/saved-competitions': typeof SavedCompetitionsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/messages/$conversationId': typeof MessagesConversationIdRoute
+  '/profile/$username': typeof ProfileUsernameRoute
   '/profiles/$id': typeof ProfilesIdRoute
   '/teams/$id': typeof TeamsIdRoute
 }
@@ -140,14 +154,16 @@ export interface FileRoutesByTo {
   '/discover': typeof DiscoverRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
-  '/messages': typeof MessagesRoute
+  '/messages': typeof MessagesRouteWithChildren
   '/my-teams': typeof MyTeamsRoute
-  '/profile': typeof ProfileRoute
+  '/profile': typeof ProfileRouteWithChildren
   '/reset-password': typeof ResetPasswordRoute
   '/saved-competitions': typeof SavedCompetitionsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/messages/$conversationId': typeof MessagesConversationIdRoute
+  '/profile/$username': typeof ProfileUsernameRoute
   '/profiles/$id': typeof ProfilesIdRoute
   '/teams/$id': typeof TeamsIdRoute
 }
@@ -160,14 +176,16 @@ export interface FileRoutesById {
   '/discover': typeof DiscoverRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
-  '/messages': typeof MessagesRoute
+  '/messages': typeof MessagesRouteWithChildren
   '/my-teams': typeof MyTeamsRoute
-  '/profile': typeof ProfileRoute
+  '/profile': typeof ProfileRouteWithChildren
   '/reset-password': typeof ResetPasswordRoute
   '/saved-competitions': typeof SavedCompetitionsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/messages/$conversationId': typeof MessagesConversationIdRoute
+  '/profile/$username': typeof ProfileUsernameRoute
   '/profiles/$id': typeof ProfilesIdRoute
   '/teams/$id': typeof TeamsIdRoute
 }
@@ -189,6 +207,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/auth/callback'
+    | '/messages/$conversationId'
+    | '/profile/$username'
     | '/profiles/$id'
     | '/teams/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -208,6 +228,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/auth/callback'
+    | '/messages/$conversationId'
+    | '/profile/$username'
     | '/profiles/$id'
     | '/teams/$id'
   id:
@@ -227,6 +249,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/auth/callback'
+    | '/messages/$conversationId'
+    | '/profile/$username'
     | '/profiles/$id'
     | '/teams/$id'
   fileRoutesById: FileRoutesById
@@ -239,9 +263,9 @@ export interface RootRouteChildren {
   DiscoverRoute: typeof DiscoverRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
-  MessagesRoute: typeof MessagesRoute
+  MessagesRoute: typeof MessagesRouteWithChildren
   MyTeamsRoute: typeof MyTeamsRoute
-  ProfileRoute: typeof ProfileRoute
+  ProfileRoute: typeof ProfileRouteWithChildren
   ResetPasswordRoute: typeof ResetPasswordRoute
   SavedCompetitionsRoute: typeof SavedCompetitionsRoute
   SettingsRoute: typeof SettingsRoute
@@ -364,6 +388,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProfilesIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/profile/$username': {
+      id: '/profile/$username'
+      path: '/$username'
+      fullPath: '/profile/$username'
+      preLoaderRoute: typeof ProfileUsernameRouteImport
+      parentRoute: typeof ProfileRoute
+    }
+    '/messages/$conversationId': {
+      id: '/messages/$conversationId'
+      path: '/$conversationId'
+      fullPath: '/messages/$conversationId'
+      preLoaderRoute: typeof MessagesConversationIdRouteImport
+      parentRoute: typeof MessagesRoute
+    }
     '/auth/callback': {
       id: '/auth/callback'
       path: '/callback'
@@ -384,6 +422,29 @@ const AuthRouteChildren: AuthRouteChildren = {
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 
+interface MessagesRouteChildren {
+  MessagesConversationIdRoute: typeof MessagesConversationIdRoute
+}
+
+const MessagesRouteChildren: MessagesRouteChildren = {
+  MessagesConversationIdRoute: MessagesConversationIdRoute,
+}
+
+const MessagesRouteWithChildren = MessagesRoute._addFileChildren(
+  MessagesRouteChildren,
+)
+
+interface ProfileRouteChildren {
+  ProfileUsernameRoute: typeof ProfileUsernameRoute
+}
+
+const ProfileRouteChildren: ProfileRouteChildren = {
+  ProfileUsernameRoute: ProfileUsernameRoute,
+}
+
+const ProfileRouteWithChildren =
+  ProfileRoute._addFileChildren(ProfileRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRouteWithChildren,
@@ -392,9 +453,9 @@ const rootRouteChildren: RootRouteChildren = {
   DiscoverRoute: DiscoverRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
-  MessagesRoute: MessagesRoute,
+  MessagesRoute: MessagesRouteWithChildren,
   MyTeamsRoute: MyTeamsRoute,
-  ProfileRoute: ProfileRoute,
+  ProfileRoute: ProfileRouteWithChildren,
   ResetPasswordRoute: ResetPasswordRoute,
   SavedCompetitionsRoute: SavedCompetitionsRoute,
   SettingsRoute: SettingsRoute,

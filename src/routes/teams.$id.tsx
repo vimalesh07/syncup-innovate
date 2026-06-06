@@ -1,12 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Bookmark, Loader2, MailPlus, MessageSquare, MoreVertical, Pencil, Save, Send, Trash2, Users, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bookmark, Copy, Edit3, Loader2, MailPlus, MessageSquare, MoreVertical, Pencil, Reply, Save, Send, Trash2, Users, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
+import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { supabase } from "@/integrations/supabase/client";
-import { Profile, initials } from "@/lib/auth";
+import { Profile } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/teams/$id")({
@@ -42,13 +43,25 @@ type TeamMessage = {
   sender_id: string;
   message: string;
   created_at: string;
+  delivery_status?: "sending" | "failed";
   deleted_for?: string[] | null;
   deleted_for_everyone?: boolean | null;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
+  edited_at?: string | null;
+  reply_to_id?: string | null;
+  reactions?: Record<string, string[]> | null;
   profile?: Profile | null;
+};
+
+type TeamSharedPostMessage = {
+  author: string;
+  content: string;
 };
 
 const skillOptions = ["React", "AI/ML", "UI/UX", "Python", "Backend", "Research", "Pitching", "Product", "IoT"];
 const purposeOptions = ["Competition", "Patent / IP Rights", "Startup", "Research Paper", "Open Source", "College Project", "Other"];
+const teamReactions = ["👍", "❤️", "🔥", "😂", "😮"];
 
 function TeamDetailRoute() {
   return (
@@ -70,6 +83,9 @@ function TeamDetail() {
   const [teamMessagesLoading, setTeamMessagesLoading] = useState(false);
   const [sendingTeamMessage, setSendingTeamMessage] = useState(false);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
+  const [replyToTeamMessage, setReplyToTeamMessage] = useState<TeamMessage | null>(null);
+  const [editingTeamMessage, setEditingTeamMessage] = useState<TeamMessage | null>(null);
+  const teamMessageScrollRef = useRef<HTMLDivElement | null>(null);
   const [saved, setSaved] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
@@ -86,8 +102,11 @@ function TeamDetail() {
   const [customSkill, setCustomSkill] = useState("");
   const [requestOpen, setRequestOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const [pendingRequest, setPendingRequest] = useState<{ id: string; status: string } | null>(null);
+  const [leavingTeam, setLeavingTeam] = useState(false);
   const isMember = members.some((member) => member.user_id === user?.id);
   const isLeader = team?.leader_id === user?.id;
+  const hasRequest = Boolean(pendingRequest && (pendingRequest.status === "pending" || pendingRequest.status === "requested"));
 
   useEffect(() => {
     supabase.from("teams").select("*").eq("id", id).maybeSingle().then(({ data }) => setTeam((data as Team) ?? null));
@@ -95,8 +114,56 @@ function TeamDetail() {
     loadTeamMessages();
     if (user) {
       (supabase as any).from("saved_teams").select("id").eq("user_id", user.id).eq("team_id", id).maybeSingle().then(({ data }: { data: { id: string } | null }) => setSaved(Boolean(data)));
+      // check if user has a pending join request
+      (supabase as any).from("join_requests").select("id, status").eq("user_id", user.id).eq("team_id", id).maybeSingle().then(({ data }: { data: { id: string; status: string } | null }) => setPendingRequest(data));
     }
   }, [id, user?.id]);
+
+  useEffect(() => {
+    if (!user || (!isMember && !isLeader)) return;
+    const channel = supabase
+      .channel(`team-messages-${id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_messages", filter: `team_id=eq.${id}` }, (payload) => {
+        if (payload.eventType === "DELETE") {
+          const oldMessage = payload.old as TeamMessage;
+          setTeamMessages((current) => current.filter((message) => message.id !== oldMessage.id));
+          return;
+        }
+        const row = payload.new as TeamMessage;
+        if (!row || (row.deleted_for ?? []).includes(user.id)) return;
+        const profile = members.find((member) => member.user_id === row.sender_id)?.profile ?? null;
+        setTeamMessages((current) => mergeTeamMessages(current, { ...row, profile }));
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [id, user?.id, isMember, isLeader, members.length]);
+
+  useEffect(() => {
+    const element = teamMessageScrollRef.current;
+    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  }, [teamMessages.length]);
+
+  useEffect(() => {
+    if (!openMessageMenuId || typeof document === "undefined") return;
+
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".message-action-menu, .message-action-button")) return;
+      setOpenMessageMenuId(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenMessageMenuId(null);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openMessageMenuId]);
 
   const loadMembers = async () => {
     const memberRows = await supabase.from("team_members").select("*").eq("team_id", id).order("joined_at", { ascending: true });
@@ -121,7 +188,7 @@ function TeamDetail() {
       return;
     }
 
-    const rows = ((data as TeamMessage[]) ?? []).filter((row) => !row.deleted_for_everyone && !(row.deleted_for ?? []).includes(user?.id ?? ""));
+    const rows = ((data as TeamMessage[]) ?? []).filter((row) => !(row.deleted_for ?? []).includes(user?.id ?? ""));
     const senderIds = [...new Set(rows.map((row) => row.sender_id))];
     const profileRows = senderIds.length ? await supabase.from("profiles").select("*").in("id", senderIds) : { data: [] };
     const profileMap = new Map(((profileRows.data as Profile[]) ?? []).map((profile) => [profile.id, profile]));
@@ -132,19 +199,35 @@ function TeamDetail() {
   const requestJoin = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!user || !team) return;
+    if (isLeader) {
+      toast.error("You already lead this team.");
+      setRequestOpen(false);
+      return;
+    }
+    if (isMember) {
+      toast.error("You are already a member of this team.");
+      setRequestOpen(false);
+      return;
+    }
+    if (hasRequest) {
+      toast.error("You already have a pending request for this team.");
+      setRequestOpen(false);
+      return;
+    }
 
-    const { error } = await supabase.from("join_requests").insert({
+    const { data, error } = await supabase.from("join_requests").insert({
       user_id: user.id,
       team_id: team.id,
       message: message.trim() || null,
       status: "pending",
-    });
+    }).select("id, status").single();
 
     if (error) {
       toast.error(error.message.includes("duplicate") ? "You already requested to join this team." : error.message);
       return;
     }
 
+    setPendingRequest(data as { id: string; status: string });
     await supabase.from("notifications").insert({
       user_id: team.leader_id,
       title: "New join request",
@@ -153,6 +236,27 @@ function TeamDetail() {
     toast.success("Join request sent.");
     setRequestOpen(false);
     setMessage("");
+  };
+
+  const leaveTeam = async () => {
+    if (!user || !team || isLeader) return;
+    if (!window.confirm(`Leave ${team.team_name}?`)) return;
+
+    setLeavingTeam(true);
+    const { error } = await supabase
+      .from("team_members")
+      .delete()
+      .eq("team_id", team.id)
+      .eq("user_id", user.id);
+    setLeavingTeam(false);
+
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+
+    setMembers((current) => current.filter((member) => member.user_id !== user.id));
+    toast.success("Left team.");
   };
 
   const openEdit = () => {
@@ -259,24 +363,35 @@ function TeamDetail() {
   const deleteTeamMessageForMe = async (item: TeamMessage) => {
     if (!user) return;
     const deletedFor = Array.from(new Set([...(item.deleted_for ?? []), user.id]));
+    setOpenMessageMenuId(null);
+    setTeamMessages((current) => current.filter((message) => message.id !== item.id));
     const { error } = await (supabase as any).from("team_messages").update({ deleted_for: deletedFor }).eq("id", item.id);
     if (error) {
       toast.error(error.message);
+      await loadTeamMessages();
       return;
     }
-    setOpenMessageMenuId(null);
-    setTeamMessages((current) => current.filter((message) => message.id !== item.id));
+    toast.success("Message deleted for you.");
   };
 
   const deleteTeamMessageForEveryone = async (item: TeamMessage) => {
     if (!user || item.sender_id !== user.id) return;
-    const { error } = await (supabase as any).from("team_messages").update({ deleted_for_everyone: true }).eq("id", item.id);
+    const confirmed = window.confirm("Delete this message for everyone? Others will no longer be able to see it.");
+    if (!confirmed) return;
+    const deletedAt = new Date().toISOString();
+    setOpenMessageMenuId(null);
+    setTeamMessages((current) => current.map((message) => message.id === item.id ? { ...message, message: "", deleted_for_everyone: true, deleted_at: deletedAt, deleted_by: user.id } : message));
+    const { error } = await (supabase as any)
+      .from("team_messages")
+      .update({ message: "", deleted_for_everyone: true, deleted_at: deletedAt, deleted_by: user.id })
+      .eq("id", item.id)
+      .eq("sender_id", user.id);
     if (error) {
       toast.error(error.message);
+      await loadTeamMessages();
       return;
     }
-    setOpenMessageMenuId(null);
-    setTeamMessages((current) => current.filter((message) => message.id !== item.id));
+    toast.success("Message deleted for everyone.");
   };
 
   const sendTeamMessage = async (event: React.FormEvent) => {
@@ -284,24 +399,53 @@ function TeamDetail() {
     if (!user || !team || !teamMessageText.trim() || (!isMember && !isLeader)) return;
 
     const text = teamMessageText.trim();
+    if (editingTeamMessage) {
+      const { error } = await (supabase as any)
+        .from("team_messages")
+        .update({ message: text, edited_at: new Date().toISOString() })
+        .eq("id", editingTeamMessage.id)
+        .eq("sender_id", user.id);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      setTeamMessages((current) => current.map((message) => message.id === editingTeamMessage.id ? { ...message, message: text, edited_at: message.edited_at ?? new Date().toISOString() } : message));
+      setEditingTeamMessage(null);
+      setTeamMessageText("");
+      return;
+    }
+
     setTeamMessageText("");
     setSendingTeamMessage(true);
+    const createdAt = new Date().toISOString();
+    const tempMessage: TeamMessage = {
+      id: `temp-${Date.now()}`,
+      team_id: team.id,
+      sender_id: user.id,
+      message: text,
+      created_at: createdAt,
+      delivery_status: "sending",
+      reply_to_id: replyToTeamMessage?.id.startsWith("temp-") ? null : replyToTeamMessage?.id ?? null,
+      profile: members.find((member) => member.user_id === user.id)?.profile ?? null,
+    };
+    setTeamMessages((current) => mergeTeamMessages(current, tempMessage));
     const { data, error } = await (supabase as any)
       .from("team_messages")
-      .insert({ team_id: team.id, sender_id: user.id, message: text })
+      .insert({ team_id: team.id, sender_id: user.id, message: text, reply_to_id: tempMessage.reply_to_id })
       .select("*")
       .single();
 
     setSendingTeamMessage(false);
     if (error) {
       toast.error(error.message);
-      setTeamMessageText(text);
+      setTeamMessages((current) => current.map((message) => message.id === tempMessage.id ? { ...message, delivery_status: "failed" } : message));
       return;
     }
 
     const newMessage = data as TeamMessage;
     const senderProfile = members.find((member) => member.user_id === user.id)?.profile ?? null;
-    setTeamMessages((current) => [...current, { ...newMessage, profile: senderProfile }]);
+    setTeamMessages((current) => mergeTeamMessages(current.filter((message) => message.id !== tempMessage.id), { ...newMessage, profile: senderProfile }));
+    setReplyToTeamMessage(null);
 
     const recipients = members
       .map((member) => member.user_id)
@@ -311,10 +455,34 @@ function TeamDetail() {
         recipients.map((recipientId) => ({
           user_id: recipientId,
           title: "New team message",
-          message: `${team.team_name} has a new message.`,
+          message: `${senderProfile?.full_name || senderProfile?.username || user.email || "Someone"} sent a message in ${team.team_name}`,
+          metadata: {
+            type: "team_message",
+            teamId: team.id,
+            teamName: team.team_name,
+            messageId: newMessage.id,
+            senderId: user.id,
+            senderName: senderProfile?.full_name || senderProfile?.username || user.email || "SyncUp user",
+            messagePreview: text,
+            targetPath: `/teams/${team.id}?tab=chat`,
+          },
+          target_path: `/teams/${team.id}?tab=chat`,
         })),
       );
     }
+  };
+
+  const copyTeamMessage = async (item: TeamMessage) => {
+    await navigator.clipboard.writeText(item.message);
+    setOpenMessageMenuId(null);
+    toast.success("Message copied.");
+  };
+
+  const editTeamMessage = (item: TeamMessage) => {
+    setEditingTeamMessage(item);
+    setReplyToTeamMessage(null);
+    setTeamMessageText(item.message);
+    setOpenMessageMenuId(null);
   };
 
   if (!team) {
@@ -342,11 +510,27 @@ function TeamDetail() {
               <Bookmark className={`h-4 w-4 ${saved ? "fill-current" : ""}`} />
               {saved ? "Saved" : "Save team"}
             </button>
-            {!isLeader && !isMember && (
-              <button onClick={() => setRequestOpen(true)} className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold">
-                <MailPlus className="h-4 w-4" />
-                Request to join
+            {!isLeader && isMember && (
+              <button
+                onClick={leaveTeam}
+                disabled={leavingTeam}
+                className="flex items-center justify-center gap-2 rounded-xl border border-red-300/25 bg-red-400/10 px-5 py-3 text-sm font-semibold text-red-100 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {leavingTeam ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                Leave team
               </button>
+            )}
+            {!isLeader && !isMember && (
+              hasRequest ? (
+                <button disabled className="flex items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/10 px-5 py-3 text-sm font-semibold text-amber-100">
+                  Request pending
+                </button>
+              ) : (
+                <button onClick={() => setRequestOpen(true)} className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold">
+                  <MailPlus className="h-4 w-4" />
+                  Request to join
+                </button>
+              )
             )}
           </div>
         </div>
@@ -379,13 +563,7 @@ function TeamDetail() {
               <article key={member.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10">
                 <div className="flex items-center gap-3">
                   <Link to="/profiles/$id" params={{ id: member.user_id }} className="flex min-w-0 flex-1 items-center gap-3">
-                    {member.profile?.avatar_url ? (
-                      <img src={member.profile.avatar_url} alt="" className="h-11 w-11 rounded-xl object-cover" />
-                    ) : (
-                      <span className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-                        {initials(member.profile ?? null)}
-                      </span>
-                    )}
+                    <SafeAvatar profile={member.profile} className="h-11 w-11" />
                     <div className="min-w-0">
                       <p className="truncate font-semibold">{member.profile?.full_name || member.profile?.username || "SyncUp user"}</p>
                       <p className="text-sm text-white/50">{member.role || "member"}</p>
@@ -416,43 +594,93 @@ function TeamDetail() {
             <span className="rounded-full bg-cyan-300/15 px-3 py-1 text-xs text-cyan-100">{members.length} members</span>
           </div>
 
-          <div className="mt-5 max-h-[440px] min-h-72 space-y-3 overflow-y-auto rounded-2xl bg-black/20 p-4">
+          <div ref={teamMessageScrollRef} className="mt-5 max-h-[440px] min-h-72 space-y-3 overflow-y-auto rounded-2xl bg-black/20 p-4">
             {teamMessagesLoading ? (
               <div className="grid h-48 place-items-center">
                 <Loader2 className="h-7 w-7 animate-spin text-cyan-300" />
               </div>
             ) : teamMessages.length ? teamMessages.map((item) => {
               const own = item.sender_id === user?.id;
+              const deleted = Boolean(item.deleted_for_everyone);
+              const reply = item.reply_to_id ? teamMessages.find((message) => message.id === item.reply_to_id) : null;
+              const sharedPost = parseTeamSharedPostMessage(item.message);
               return (
-                <div key={item.id} className={`flex items-end gap-2 ${own ? "justify-end" : "justify-start"}`}>
+                <div key={item.id} className={`group flex gap-2 sm:gap-3 ${own ? "justify-end" : "justify-start"}`}>
                   {!own && (
                     <Link
                       to="/profiles/$id"
                       params={{ id: item.sender_id }}
-                      className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-xs font-bold ring-1 ring-white/10"
+                      className="mt-1 grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-xs font-bold ring-1 ring-white/10"
                       title="Open profile"
                     >
-                      {item.profile?.avatar_url ? <img src={item.profile.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(item.profile ?? null)}
+                      <SafeAvatar profile={item.profile} className="h-full w-full text-xs ring-0" />
                     </Link>
                   )}
-                  <div className="relative">
-                    <div className={`max-w-[82%] rounded-2xl px-4 py-3 pr-10 text-sm ${own ? "bg-cyan-300/20 text-cyan-50" : "bg-white/8 text-white/75"}`}>
+                  <div className={`relative min-w-0 ${sharedPost ? "w-fit max-w-[85%] sm:max-w-[680px]" : "max-w-[85%] sm:max-w-[620px]"} ${own ? "ml-auto" : "mr-auto"}`}>
+                    <div className={`rounded-2xl px-4 py-3 text-sm shadow-sm ${own ? "bg-cyan-300/20 text-cyan-50" : "bg-white/8 text-white/75"}`}>
                       {!own && <p className="mb-1 text-xs font-semibold text-cyan-100">{item.profile?.full_name || item.profile?.username || "Team member"}</p>}
-                      <p className="whitespace-pre-wrap">{item.message}</p>
-                      <p className="mt-1 text-[10px] text-white/35">{new Date(item.created_at).toLocaleString()}</p>
+                      {reply && !deleted && (
+                        <div className="mb-2 rounded-lg border-l-2 border-cyan-300 bg-black/15 px-3 py-2 text-xs text-white/55">
+                          Replying to: {reply.deleted_for_everyone ? "This message was deleted" : reply.message}
+                        </div>
+                      )}
+                      {deleted ? (
+                        <p className="italic text-white/45">This message was deleted</p>
+                      ) : sharedPost ? (
+                        <TeamSharedPostPreview sharedPost={sharedPost} />
+                      ) : (
+                        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.message}</p>
+                      )}
+                      <p className={`mt-2 text-[10px] text-white/35 ${own ? "text-right" : "text-left"}`}>
+                        {item.delivery_status === "sending" ? "Sending..." : item.delivery_status === "failed" ? "Failed to send" : `${item.edited_at ? "edited · " : ""}${new Date(item.created_at).toLocaleString()}`}
+                      </p>
                     </div>
-                    <button onClick={() => setOpenMessageMenuId(openMessageMenuId === item.id ? null : item.id)} className="absolute right-2 top-2 rounded-lg p-1 text-white/50 hover:bg-white/10">
-                      <MoreVertical className="h-4 w-4" />
-                    </button>
-                    {openMessageMenuId === item.id && (
-                      <div className="absolute right-0 top-9 z-20 w-44 rounded-xl border border-white/10 bg-[#101827] p-2 shadow-2xl">
+                    {!deleted && (
+                      <button onClick={() => setOpenMessageMenuId(openMessageMenuId === item.id ? null : item.id)} className="message-action-button absolute right-2 top-2 rounded-lg p-1 text-white/50 hover:bg-white/10 sm:hidden">
+                        <MoreVertical className="h-4 w-4" />
+                      </button>
+                    )}
+                    {!deleted && (
+                      <div className={`absolute -top-9 hidden items-center gap-1 rounded-xl border border-white/10 bg-[#101827]/95 p-1 shadow-xl backdrop-blur sm:group-hover:flex ${own ? "right-0" : "left-0"}`}>
+                        <button onClick={() => { setReplyToTeamMessage(item); setEditingTeamMessage(null); setOpenMessageMenuId(null); }} className="grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="Reply">
+                          <Reply className="h-3.5 w-3.5" />
+                        </button>
+                        <button onClick={() => copyTeamMessage(item)} className="grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="Copy">
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
+                        {own && (
+                          <button onClick={() => editTeamMessage(item)} className="grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="Edit">
+                            <Edit3 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        <button onClick={() => setOpenMessageMenuId(openMessageMenuId === item.id ? null : item.id)} className="message-action-button grid h-7 w-7 place-items-center rounded-lg text-white/65 hover:bg-white/10" title="More">
+                          <MoreVertical className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
+                    {!deleted && openMessageMenuId === item.id && (
+                      <div className="message-action-menu absolute right-0 top-9 z-20 w-44 rounded-xl border border-white/10 bg-[#101827] p-2 shadow-2xl">
+                        <button onClick={() => { setReplyToTeamMessage(item); setEditingTeamMessage(null); setOpenMessageMenuId(null); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
+                          <Reply className="h-3.5 w-3.5" />
+                          Reply
+                        </button>
+                        <button onClick={() => copyTeamMessage(item)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
+                          <Copy className="h-3.5 w-3.5" />
+                          Copy
+                        </button>
                         <button onClick={() => deleteTeamMessageForMe(item)} className="block w-full rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
                           Delete for me
                         </button>
                         {own && (
-                          <button onClick={() => deleteTeamMessageForEveryone(item)} className="block w-full rounded-lg px-3 py-2 text-left text-xs text-red-200 hover:bg-red-500/10">
-                            Delete for everyone
-                          </button>
+                          <>
+                            <button onClick={() => editTeamMessage(item)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10">
+                              <Edit3 className="h-3.5 w-3.5" />
+                              Edit
+                            </button>
+                            <button onClick={() => deleteTeamMessageForEveryone(item)} className="block w-full rounded-lg px-3 py-2 text-left text-xs text-red-200 hover:bg-red-500/10">
+                              Delete for everyone
+                            </button>
+                          </>
                         )}
                       </div>
                     )}
@@ -467,6 +695,18 @@ function TeamDetail() {
           </div>
 
           <form onSubmit={sendTeamMessage} className="mt-4 flex flex-col gap-3 sm:flex-row">
+            {(replyToTeamMessage || editingTeamMessage) && (
+              <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/65 sm:col-span-2 sm:w-full">
+                <div className="flex items-center justify-between gap-3">
+                  <span>
+                    {editingTeamMessage ? "Editing message" : "Replying to"}: {(editingTeamMessage ?? replyToTeamMessage)?.message || "This message was deleted"}
+                  </span>
+                  <button type="button" onClick={() => { setReplyToTeamMessage(null); setEditingTeamMessage(null); setTeamMessageText(""); }} className="rounded-lg p-1 text-white/50 hover:bg-white/10">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
             <input
               value={teamMessageText}
               onChange={(event) => setTeamMessageText(event.target.value)}
@@ -478,7 +718,7 @@ function TeamDetail() {
               className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold disabled:opacity-60"
             >
               {sendingTeamMessage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Send
+              {editingTeamMessage ? "Save" : "Send"}
             </button>
           </form>
         </section>
@@ -663,4 +903,66 @@ function Field({
       />
     </div>
   );
+}
+
+function mergeTeamMessages(messages: TeamMessage[], incoming: TeamMessage) {
+  const next = messages
+    .filter((message) => message.id !== incoming.id)
+    .filter((message) => !isMatchingTeamTemp(message, incoming));
+  return [...next, incoming].sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+}
+
+function isMatchingTeamTemp(temp: TeamMessage, incoming: TeamMessage) {
+  if (!temp.id.startsWith("temp-") || incoming.id.startsWith("temp-")) return false;
+  if (temp.sender_id !== incoming.sender_id || temp.team_id !== incoming.team_id || temp.message !== incoming.message) return false;
+  return Math.abs(+new Date(temp.created_at) - +new Date(incoming.created_at)) < 30000;
+}
+
+function parseTeamSharedPostMessage(value?: string | null): TeamSharedPostMessage | null {
+  if (!value) return null;
+  const match = value.match(/^Shared a SyncUp post from ([^:\n]+):\s*\n+([\s\S]+)$/i);
+  if (!match) return null;
+  const author = match[1]?.trim();
+  const content = match[2]?.trim();
+  if (!author || !content) return null;
+  return { author, content };
+}
+
+function TeamSharedPostPreview({ sharedPost }: { sharedPost: TeamSharedPostMessage }) {
+  return (
+    <div className="space-y-3">
+      <div className="space-y-0.5">
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-cyan-100/70">Shared a SyncUp post</p>
+        <p className="text-sm font-semibold text-white/85">from {sharedPost.author}</p>
+      </div>
+      <div className="rounded-xl border border-white/10 bg-black/15 p-3 text-sm leading-relaxed text-white/80 shadow-inner sm:p-4">
+        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{sharedPost.content}</p>
+      </div>
+    </div>
+  );
+}
+
+function normalizeTeamReactions(value: TeamMessage["reactions"]) {
+  if (!value || Array.isArray(value) || typeof value !== "object") return {} as Record<string, string[]>;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, users]) => Array.isArray(users))
+      .map(([reaction, users]) => [reaction, [...new Set(users as string[])]])
+      .filter(([, users]) => users.length),
+  ) as Record<string, string[]>;
+}
+
+function toggleTeamUserReaction(current: Record<string, string[]>, userId: string, reaction: string) {
+  const hadReaction = (current[reaction] ?? []).includes(userId);
+  const next = Object.fromEntries(
+    Object.entries(current)
+      .map(([emoji, users]) => [emoji, users.filter((id) => id !== userId)])
+      .filter(([, users]) => users.length),
+  ) as Record<string, string[]>;
+
+  if (!hadReaction) {
+    next[reaction] = [...new Set([...(next[reaction] ?? []), userId])];
+  }
+
+  return next;
 }

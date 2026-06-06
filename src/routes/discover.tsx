@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
+import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { supabase } from "@/integrations/supabase/client";
-import { Profile, initials } from "@/lib/auth";
+import { Profile } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/discover")({
@@ -37,6 +38,52 @@ function DiscoverRoute() {
   );
 }
 
+function normalizeProfileForCard(profile: Profile): Profile {
+  return {
+    ...profile,
+    full_name: textOrNull(profile.full_name),
+    username: textOrNull(profile.username),
+    avatar_url: textOrNull(profile.avatar_url),
+    bio: textOrNull(profile.bio),
+    college: textOrNull(profile.college),
+    role: textOrNull(profile.role),
+    github_url: textOrNull(profile.github_url),
+    linkedin_url: textOrNull(profile.linkedin_url),
+    portfolio_url: textOrNull(profile.portfolio_url),
+    skills: normalizeProfileSkills(profile.skills),
+    reliability_score: Number.isFinite(Number(profile.reliability_score)) ? Number(profile.reliability_score) : 100,
+  };
+}
+
+function normalizeTeamForCard(team: Team): Team {
+  return {
+    ...team,
+    team_name: typeof team.team_name === "string" && team.team_name.trim() ? team.team_name.trim() : "Untitled team",
+    team_purpose: textOrNull(team.team_purpose),
+    target_name: textOrNull(team.target_name),
+    project_title: textOrNull(team.project_title),
+    description: textOrNull(team.description),
+    required_skills: normalizeProfileSkills(team.required_skills),
+    max_members: Number.isFinite(Number(team.max_members)) ? Number(team.max_members) : null,
+  };
+}
+
+function normalizeProfileSkills(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((skill) => `${skill}`.trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((skill) => skill.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function textOrNull(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
 function DiscoverPage() {
   const { user } = useAuth();
   const [query, setQuery] = useState("");
@@ -45,6 +92,9 @@ function DiscoverPage() {
   const [loading, setLoading] = useState(true);
   const [requestTeam, setRequestTeam] = useState<Team | null>(null);
   const [savedTeamIds, setSavedTeamIds] = useState<string[]>([]);
+  const [memberTeamIds, setMemberTeamIds] = useState<string[]>([]);
+  const [pendingTeamIds, setPendingTeamIds] = useState<string[]>([]);
+  const [leavingTeamId, setLeavingTeamId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -78,11 +128,31 @@ function DiscoverPage() {
       if (teamResult.error) toast.error(teamResult.error.message);
       if (profileResult.error) toast.error(profileResult.error.message);
 
-      setTeams((teamResult.data as Team[]) ?? []);
-      setProfiles(((profileResult.data as Profile[]) ?? []).filter((profile) => profile.id !== user?.id));
+      const teamRows = ((teamResult.data as Team[]) ?? []).map(normalizeTeamForCard);
+      const teamIds = teamRows.map((team) => team.id);
+      setTeams(teamRows);
+      setProfiles(
+        ((profileResult.data as Profile[]) ?? [])
+          .filter((profile) => profile?.id && profile.id !== user?.id)
+          .map(normalizeProfileForCard),
+      );
       if (user) {
-        const saved = await (supabase as any).from("saved_teams").select("team_id").eq("user_id", user.id);
+        const [saved, memberships, requests] = await Promise.all([
+          (supabase as any).from("saved_teams").select("team_id").eq("user_id", user.id),
+          teamIds.length
+            ? supabase.from("team_members").select("team_id").eq("user_id", user.id).in("team_id", teamIds)
+            : Promise.resolve({ data: [] }),
+          teamIds.length
+            ? supabase.from("join_requests").select("team_id, status").eq("user_id", user.id).in("status", ["pending", "requested"]).in("team_id", teamIds)
+            : Promise.resolve({ data: [] }),
+        ]);
         setSavedTeamIds(((saved.data as Array<{ team_id: string }>) ?? []).map((item) => item.team_id));
+        setMemberTeamIds(((memberships.data as Array<{ team_id: string }>) ?? []).map((item) => item.team_id));
+        setPendingTeamIds(((requests.data as Array<{ team_id: string; status: string }>) ?? []).map((item) => item.team_id));
+      } else {
+        setSavedTeamIds([]);
+        setMemberTeamIds([]);
+        setPendingTeamIds([]);
       }
       setLoading(false);
     }, 250);
@@ -100,7 +170,7 @@ function DiscoverPage() {
         profile.college,
         profile.bio,
         profile.role,
-        ...(profile.skills ?? []),
+        ...normalizeProfileSkills(profile.skills),
       ]
         .filter(Boolean)
         .some((value) => `${value}`.toLowerCase().includes(lower));
@@ -112,6 +182,18 @@ function DiscoverPage() {
     if (!user || !requestTeam) return;
     if (requestTeam.leader_id === user.id) {
       toast.error("You already lead this team.");
+      return;
+    }
+    if (memberTeamIds.includes(requestTeam.id)) {
+      toast.error("You are already a member of this team.");
+      setRequestTeam(null);
+      setMessage("");
+      return;
+    }
+    if (pendingTeamIds.includes(requestTeam.id)) {
+      toast.error("You already have a pending request for this team.");
+      setRequestTeam(null);
+      setMessage("");
       return;
     }
 
@@ -143,8 +225,47 @@ function DiscoverPage() {
       return;
     }
     toast.success("Join request sent.");
+    setPendingTeamIds((current) => current.includes(requestTeam.id) ? current : [...current, requestTeam.id]);
     setRequestTeam(null);
     setMessage("");
+  };
+
+  const openJoinRequest = (team: Team) => {
+    if (!user) return;
+    if (team.leader_id === user.id) {
+      toast.error("You already lead this team.");
+      return;
+    }
+    if (memberTeamIds.includes(team.id)) {
+      toast.error("You are already a member of this team.");
+      return;
+    }
+    if (pendingTeamIds.includes(team.id)) {
+      toast.error("You already have a pending request for this team.");
+      return;
+    }
+    setRequestTeam(team);
+  };
+
+  const leaveTeam = async (team: Team) => {
+    if (!user || team.leader_id === user.id) return;
+    if (!window.confirm(`Leave ${team.team_name}?`)) return;
+
+    setLeavingTeamId(team.id);
+    const { error } = await supabase
+      .from("team_members")
+      .delete()
+      .eq("team_id", team.id)
+      .eq("user_id", user.id);
+    setLeavingTeamId(null);
+
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+
+    setMemberTeamIds((current) => current.filter((id) => id !== team.id));
+    toast.success("Left team.");
   };
 
   const toggleSaveTeam = async (team: Team) => {
@@ -190,7 +311,12 @@ function DiscoverPage() {
           <section className="glass-strong rounded-2xl p-6">
             <h2 className="flex items-center gap-2 text-xl font-semibold"><Users className="h-5 w-5 text-cyan-300" /> Teams</h2>
             <div className="mt-5 grid gap-4 md:grid-cols-2">
-              {teams.length ? teams.map((team) => (
+              {teams.length ? teams.map((team) => {
+                const isOwner = team.leader_id === user?.id;
+                const isMember = memberTeamIds.includes(team.id);
+                const hasPendingRequest = pendingTeamIds.includes(team.id);
+
+                return (
                 <motion.article key={team.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-white/10 bg-white/5 p-5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -209,14 +335,39 @@ function DiscoverPage() {
                     ))}
                   </div>
                   <div className="mt-5 grid gap-2 sm:grid-cols-[1fr_auto]">
-                    <button
-                      onClick={() => setRequestTeam(team)}
-                      disabled={team.leader_id === user?.id}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <MailPlus className="h-4 w-4" />
-                      {team.leader_id === user?.id ? "Your team" : "Request to join"}
-                    </button>
+                    {isOwner ? (
+                      <Link
+                        to="/teams/$id"
+                        params={{ id: team.id }}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/15"
+                      >
+                        Manage team
+                      </Link>
+                    ) : isMember ? (
+                      <button
+                        onClick={() => leaveTeam(team)}
+                        disabled={leavingTeamId === team.id}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-300/25 bg-red-400/10 px-4 py-2.5 text-sm font-semibold text-red-100 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {leavingTeamId === team.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                        Leave team
+                      </button>
+                    ) : hasPendingRequest ? (
+                      <button
+                        disabled
+                        className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-amber-300/30 bg-amber-300/10 px-4 py-2.5 text-sm font-semibold text-amber-100"
+                      >
+                        Request pending
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => openJoinRequest(team)}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-4 py-2.5 text-sm font-semibold"
+                      >
+                        <MailPlus className="h-4 w-4" />
+                        Request to join
+                      </button>
+                    )}
                     <button
                       onClick={() => toggleSaveTeam(team)}
                       className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/70 hover:bg-white/10"
@@ -226,7 +377,8 @@ function DiscoverPage() {
                     </button>
                   </div>
                 </motion.article>
-              )) : (
+                );
+              }) : (
                 <p className="md:col-span-2 rounded-2xl border border-dashed border-white/15 bg-white/5 p-10 text-center text-white/55">No teams found.</p>
               )}
             </div>
@@ -238,13 +390,7 @@ function DiscoverPage() {
               {filteredProfiles.length ? filteredProfiles.map((profile) => (
                 <div key={profile.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <Link to="/profiles/$id" params={{ id: profile.id }} className="flex items-center gap-3 rounded-xl transition hover:bg-white/5">
-                    {profile.avatar_url ? (
-                      <img src={profile.avatar_url} alt="" className="h-11 w-11 rounded-xl object-cover" />
-                    ) : (
-                      <span className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-                        {initials(profile)}
-                      </span>
-                    )}
+                    <SafeAvatar profile={profile} className="h-11 w-11" />
                     <div>
                       <p className="font-semibold">{profile.full_name || profile.username || "SyncUp user"}</p>
                       <p className="text-sm text-white/50">@{profile.username || "profile"} · {profile.role || "Builder"}</p>
@@ -252,7 +398,7 @@ function DiscoverPage() {
                   </Link>
                   <p className="mt-3 line-clamp-2 text-sm text-white/55">{profile.bio || profile.college || "No profile bio yet."}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {(profile.skills ?? []).slice(0, 5).map((skill) => (
+                    {normalizeProfileSkills(profile.skills).slice(0, 5).map((skill) => (
                       <span key={skill} className="rounded-full bg-white/8 px-3 py-1 text-xs text-white/70">{skill}</span>
                     ))}
                   </div>

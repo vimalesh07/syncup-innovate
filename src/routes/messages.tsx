@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useLocation } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import {
   ArrowDown,
@@ -13,11 +13,9 @@ import {
   Loader2,
   MessageSquare,
   MoreVertical,
-  Pin,
   Reply,
   Search,
   Send,
-  SmilePlus,
   Trash2,
   Users,
   Volume2,
@@ -25,12 +23,15 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
+import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { supabase } from "@/integrations/supabase/client";
-import { Profile, initials } from "@/lib/auth";
+import { Profile } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
+import { directMessageNotification, insertNotification } from "@/lib/notifications";
 
 export const Route = createFileRoute("/messages")({
   head: () => ({ meta: [{ title: "Messages | SyncUp" }] }),
@@ -49,9 +50,12 @@ type MessageRow = {
   request_id?: string;
   message: string;
   created_at: string;
+  delivery_status?: "sending" | "failed";
   read?: boolean | null;
   deleted_for?: string[] | null;
   deleted_for_everyone?: boolean | null;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
   delivered_at?: string | null;
   read_by?: string[] | null;
   edited_at?: string | null;
@@ -117,7 +121,12 @@ type AttachmentDraft = {
   previewUrl?: string;
 };
 
-function MessagesRoute() {
+type SharedPostMessage = {
+  author: string;
+  content: string;
+};
+
+export function MessagesRoute() {
   return (
     <ProtectedPage>
       <PlatformShell>
@@ -128,7 +137,8 @@ function MessagesRoute() {
 }
 
 function MessagesPage() {
-  const { user } = useAuth();
+  const { profile, user } = useAuth();
+  const location = useLocation();
   const [threads, setThreads] = useState<Thread[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
   const [presence, setPresence] = useState<Map<string, Presence>>(new Map());
@@ -144,7 +154,6 @@ function MessagesPage() {
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<MessageRow | null>(null);
   const [editing, setEditing] = useState<MessageRow | null>(null);
-  const [pinnedOpen, setPinnedOpen] = useState(false);
   const [quickProfile, setQuickProfile] = useState<Profile | null>(null);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -156,8 +165,26 @@ function MessagesPage() {
   const messageRefs = useRef(new Map<string, HTMLDivElement>());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const typingTimerRef = useRef<number | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const threadsRef = useRef<Thread[]>([]);
+  const profilesRef = useRef<Map<string, Profile>>(new Map());
+  const mutedRef = useRef<Set<string>>(new Set());
 
-  const selected = useMemo(() => threads.find((thread) => thread.id === selectedId) ?? threads[0] ?? null, [threads, selectedId]);
+  const routeConversationId = useMemo(() => {
+    const match = location.pathname.match(/^\/messages\/([^/?#]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  }, [location.pathname]);
+  const directProfileId = useMemo(() => {
+    const search = location.searchStr?.startsWith("?") ? location.searchStr.slice(1) : location.searchStr ?? "";
+    const direct = new URLSearchParams(search).get("direct");
+    return direct || directProfileIdFromThreadId(routeConversationId);
+  }, [location.searchStr, routeConversationId]);
+  const requestedConversationId = routeConversationId || (directProfileId && directProfileId !== user?.id ? `direct-${directProfileId}` : null);
+  const selected = useMemo(() => {
+    if (requestedConversationId) return threads.find((thread) => String(thread.id) === String(requestedConversationId)) ?? null;
+    if (selectedId) return threads.find((thread) => thread.id === selectedId) ?? null;
+    return threads[0] ?? null;
+  }, [threads, selectedId, requestedConversationId]);
   const muteKey = user ? `syncup_muted_threads_${user.id}` : "";
   const draftPrefix = user ? `syncup_message_draft_${user.id}_` : "";
   const muted = useMemo(() => readStringSet(muteKey), [muteKey, threads.length]);
@@ -190,7 +217,42 @@ function MessagesPage() {
       });
   }, [threads, query, filter, typingRows, user?.id]);
 
-  const pinnedMessages = useMemo(() => selected?.messages.filter((message) => (message.pinned_by ?? []).length) ?? [], [selected]);
+  useEffect(() => {
+    selectedIdRef.current = selected?.id ?? selectedId;
+  }, [selected?.id, selectedId]);
+
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
+
+  useEffect(() => {
+    profilesRef.current = profiles;
+  }, [profiles]);
+
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  useEffect(() => {
+    if (!openMessageMenuId || typeof document === "undefined") return;
+
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".message-action-menu, .message-action-button")) return;
+      setOpenMessageMenuId(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenMessageMenuId(null);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openMessageMenuId]);
+
   const selectedTyping = useMemo(() => {
     if (!selected || !user) return [];
     const now = Date.now();
@@ -203,7 +265,6 @@ function MessagesPage() {
     if (!user) return;
     if (!silent) setLoading(true);
 
-    const directProfileId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("direct") : null;
     const deletedThreads = readLocalDeletedThreads(user.id);
     const directResult = await (supabase as any)
       .from("direct_messages")
@@ -235,7 +296,6 @@ function MessagesPage() {
     const teamMap = new Map([...(teamsResult.data as Team[] ?? []), ...leaderTeams].map((team) => [team.id, team]));
 
     const localReactions = readLocalReactionFallback(user.id);
-    const localPins = readLocalPinFallback(user.id);
     const localReads = readLocalReadFallback(user.id);
     const directRows = ((directResult.data as MessageRow[]) ?? [])
       .filter(isVisibleFor(user.id))
@@ -243,7 +303,7 @@ function MessagesPage() {
         const otherId = message.sender_id === user.id ? message.recipient_id! : message.sender_id;
         return isAfterDeletedThreadCutoff(`direct-${otherId}`, message.created_at, deletedThreads);
       })
-      .map((message) => applyLocalReadFallback(applyLocalPinFallback(applyLocalReactionFallback(message, localReactions), localPins), localReads, user.id));
+      .map((message) => applyLocalReadFallback(applyLocalReactionFallback(message, localReactions), localReads, user.id));
     const otherProfileIds = new Set<string>();
     directRows.forEach((message) => otherProfileIds.add(message.sender_id === user.id ? message.recipient_id! : message.sender_id));
     if (directProfileId && directProfileId !== user.id) otherProfileIds.add(directProfileId);
@@ -263,8 +323,10 @@ function MessagesPage() {
     const directThreads = [...groupBy(directRows, (message) => (message.sender_id === user.id ? message.recipient_id! : message.sender_id)).entries()].map(([otherId, messages]) => {
       const profile = profileMap.get(otherId);
       const last = messages[messages.length - 1];
+      const threadId = `direct-${otherId}`;
+      const active = selectedIdRef.current === threadId;
       return {
-        id: `direct-${otherId}`,
+        id: threadId,
         type: "direct" as const,
         title: profile?.full_name || profile?.username || "SyncUp user",
         subtitle: last?.message || attachmentSubtitle(last) || "Direct message",
@@ -273,7 +335,7 @@ function MessagesPage() {
         recipientId: otherId,
         updatedAt: last?.created_at ?? new Date().toISOString(),
         messages,
-        unreadCount: messages.filter((message) => isUnread(message, user.id)).length,
+        unreadCount: active ? 0 : messages.filter((message) => isUnread(message, user.id)).length,
       };
     });
 
@@ -297,7 +359,7 @@ function MessagesPage() {
       ((requestMessagesResult.data as MessageRow[]) ?? [])
         .filter(isVisibleFor(user.id))
         .filter((message) => isAfterDeletedThreadCutoff(`request-${message.request_id}`, message.created_at, deletedThreads))
-        .map((message) => applyLocalReadFallback(applyLocalPinFallback(applyLocalReactionFallback(message, localReactions), localPins), localReads, user.id)),
+        .map((message) => applyLocalReadFallback(applyLocalReactionFallback(message, localReactions), localReads, user.id)),
       (message) => message.request_id ?? "",
     );
     const requestThreads = requests.map((request) => {
@@ -305,12 +367,14 @@ function MessagesPage() {
       const otherId = request.user_id === user.id ? team?.leader_id : request.user_id;
       const profile = otherId ? profileMap.get(otherId) : null;
       const rows = requestMessageMap.get(request.id) ?? [];
+      const threadId = `request-${request.id}`;
+      const active = selectedIdRef.current === threadId;
       const visibleMessages = request.message
         ? [{ id: `${request.id}-initial`, sender_id: request.user_id, request_id: request.id, message: request.message, created_at: request.created_at, read_by: [user.id] }, ...rows]
         : rows;
       const last = visibleMessages[visibleMessages.length - 1];
       return {
-        id: `request-${request.id}`,
+        id: threadId,
         type: "request" as const,
         title: team?.team_name || "Team request",
         subtitle: last?.message || `${request.status} request`,
@@ -321,7 +385,7 @@ function MessagesPage() {
         recipientId: otherId,
         updatedAt: last?.created_at ?? request.created_at,
         messages: visibleMessages,
-        unreadCount: visibleMessages.filter((message) => isUnread(message, user.id)).length,
+        unreadCount: active ? 0 : visibleMessages.filter((message) => isUnread(message, user.id)).length,
         requestStatus: request.status,
         requestMessage: request.message,
         requestUserId: request.user_id,
@@ -332,8 +396,9 @@ function MessagesPage() {
     });
 
     const nextThreads = [...directThreads, ...requestThreads];
-    setThreads(nextThreads);
+    setThreads((current) => mergeOptimisticThreads(current, nextThreads));
     setSelectedId((current) => {
+      if (requestedConversationId && nextThreads.some((thread) => String(thread.id) === String(requestedConversationId))) return requestedConversationId;
       if (directProfileId && directProfileId !== user.id) return `direct-${directProfileId}`;
       return current && nextThreads.some((thread) => thread.id === current) ? current : nextThreads[0]?.id ?? null;
     });
@@ -352,14 +417,8 @@ function MessagesPage() {
 
     const channel = supabase
       .channel(`messages-${user.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "direct_messages" }, (payload) => {
-        notifyIncoming(payload);
-        loadThreads({ silent: true });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "join_request_messages" }, (payload) => {
-        notifyIncoming(payload);
-        loadThreads({ silent: true });
-      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "direct_messages" }, handleRealtimeMessage)
+      .on("postgres_changes", { event: "*", schema: "public", table: "join_request_messages" }, handleRealtimeMessage)
       .on("postgres_changes", { event: "*", schema: "public", table: "message_presence" }, (payload) => {
         const row = (payload.new ?? payload.old) as Presence;
         if (!row?.user_id) return;
@@ -370,8 +429,9 @@ function MessagesPage() {
 
     const refreshTimer = window.setInterval(() => {
       loadTyping();
+      if (!document.hidden) loadThreads({ silent: true });
       upsertPresence(document.hidden ? "away" : "online");
-    }, 12000);
+    }, 2500);
 
     return () => {
       document.removeEventListener("visibilitychange", markAway);
@@ -381,6 +441,14 @@ function MessagesPage() {
       upsertPresence("offline");
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user || !requestedConversationId) return;
+    setFilter("all");
+    setSelectedId(requestedConversationId);
+    if (compactChat) setChatOpen(true);
+    void loadThreads({ silent: true });
+  }, [requestedConversationId, user?.id]);
 
   useEffect(() => {
     if (!selected || !user) return;
@@ -396,6 +464,17 @@ function MessagesPage() {
     if (!selected || !user || editing) return;
     window.localStorage.setItem(`${draftPrefix}${selected.id}`, text);
   }, [text, selected?.id, user?.id, editing]);
+
+  useEffect(() => {
+    if (!selected || showJump) return;
+    window.setTimeout(scrollToBottom, 60);
+  }, [selected?.messages.length, selected?.id, showJump]);
+
+  useEffect(() => {
+    if (!selected || !user) return;
+    const hasUnread = selected.messages.some((message) => isUnread(message, user.id) && !message.id.endsWith("-initial"));
+    if (hasUnread) void markThreadRead(selected);
+  }, [selected?.messages.length, selected?.id, user?.id]);
 
   const upsertPresence = async (status: Presence["status"]) => {
     if (!user) return;
@@ -417,14 +496,121 @@ function MessagesPage() {
     const row = payload.new as MessageRow;
     if (!row || row.sender_id === user.id) return;
     const threadId = row.recipient_id ? `direct-${row.sender_id}` : row.request_id ? `request-${row.request_id}` : "";
-    if (!threadId || muted.has(threadId)) return;
+    if (!threadId || mutedRef.current.has(threadId)) return;
     playMessageSound();
     if (typeof window === "undefined" || !("Notification" in window)) return;
-    const title = profiles.get(row.sender_id)?.full_name || profiles.get(row.sender_id)?.username || "New message";
+    const senderProfile = profilesRef.current.get(row.sender_id);
+    const title = senderProfile?.full_name || senderProfile?.username || "New message";
     if (Notification.permission === "granted") {
       new Notification(title, { body: row.message || attachmentSubtitle(row) || "Sent an attachment" });
     } else if (Notification.permission !== "denied") {
       Notification.requestPermission();
+    }
+  };
+
+  const shouldAutoScroll = () => {
+    const el = scrollRef.current;
+    return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 220;
+  };
+
+  const updateThreadWithMessage = (message: MessageRow, options: { replaceTempId?: string; forceRead?: boolean } = {}) => {
+    if (!user) return;
+    const threadId = getThreadIdForMessage(message, user.id);
+    if (!threadId) return;
+    const active = selectedIdRef.current === threadId;
+    const nextMessage = options.forceRead || (active && message.sender_id !== user.id)
+      ? { ...message, read: true, read_by: Array.from(new Set([...(message.read_by ?? []), user.id])) }
+      : message;
+
+    setThreads((current) => {
+      let found = false;
+      const next = current.map((thread) => {
+        if (thread.id !== threadId) return thread;
+        found = true;
+        const messages = mergeThreadMessages(thread.messages, nextMessage, options.replaceTempId);
+        const last = messages[messages.length - 1];
+        return {
+          ...thread,
+          messages,
+          subtitle: last?.message || attachmentSubtitle(last) || thread.subtitle,
+          updatedAt: last?.created_at ?? thread.updatedAt,
+          unreadCount: active ? 0 : messages.filter((item) => isUnread(item, user.id)).length,
+        };
+      });
+
+      if (found || message.request_id || message.sender_id === user.id) return next;
+
+      const otherId = message.sender_id === user.id ? message.recipient_id : message.sender_id;
+      if (!otherId) return next;
+      const profile = profilesRef.current.get(otherId);
+      const messages = [nextMessage];
+      return [{
+        id: threadId,
+        type: "direct",
+        title: profile?.full_name || profile?.username || "SyncUp user",
+        subtitle: nextMessage.message || attachmentSubtitle(nextMessage) || "Direct message",
+        avatarUrl: profile?.avatar_url,
+        profileId: otherId,
+        recipientId: otherId,
+        updatedAt: nextMessage.created_at,
+        messages,
+        unreadCount: active ? 0 : messages.filter((item) => isUnread(item, user.id)).length,
+      }, ...next];
+    });
+  };
+
+  const markRealtimeMessageRead = async (message: MessageRow) => {
+    if (!user || message.sender_id === user.id || message.id.startsWith("temp-")) return;
+    const table = message.request_id ? "join_request_messages" : "direct_messages";
+    const readBy = Array.from(new Set([...(message.read_by ?? []), user.id]));
+    const result = await (supabase as any)
+      .from(table)
+      .update(message.request_id ? { read_by: readBy } : { read: true, read_by: readBy })
+      .eq("id", message.id);
+    if (!result.error && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("syncup_message_reads_updated"));
+    }
+    if (result.error && isMissingMessageMetadata(result.error)) {
+      saveLocalReadFallback(user.id, message.id);
+      if (!message.request_id) {
+        await (supabase as any).from("direct_messages").update({ read: true }).eq("id", message.id);
+      }
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("syncup_message_reads_updated"));
+    }
+  };
+
+  const handleRealtimeMessage = (payload: any) => {
+    if (!user) return;
+    notifyIncoming(payload);
+
+    if (payload.eventType === "UPDATE") {
+      const row = payload.new as MessageRow;
+      if (!row || !isRelevantMessage(row, user.id, threadsRef.current)) return;
+      const threadId = getThreadIdForMessage(row, user.id);
+      const active = Boolean(threadId && selectedIdRef.current === threadId);
+      const nearBottom = shouldAutoScroll();
+      updateThreadWithMessage(row, { forceRead: active });
+      if (active && row.sender_id !== user.id && isUnread(row, user.id)) void markRealtimeMessageRead(row);
+      if (active && nearBottom) window.setTimeout(scrollToBottom, 60);
+      return;
+    }
+
+    if (payload.eventType !== "INSERT") {
+      loadThreads({ silent: true });
+      return;
+    }
+
+    const row = payload.new as MessageRow;
+    if (!row || !isRelevantMessage(row, user.id, threadsRef.current)) return;
+    const threadId = getThreadIdForMessage(row, user.id);
+    const active = Boolean(threadId && selectedIdRef.current === threadId);
+    const nearBottom = shouldAutoScroll();
+    updateThreadWithMessage(row);
+    if (active && row.sender_id !== user.id) void markRealtimeMessageRead(row);
+    if (active && nearBottom) window.setTimeout(scrollToBottom, 60);
+
+    if (!threadsRef.current.some((thread) => thread.id === threadId) && (row.request_id || !profilesRef.current.has(row.sender_id))) {
+      loadThreads({ silent: true });
     }
   };
 
@@ -476,14 +662,27 @@ function MessagesPage() {
     event.preventDefault();
     if (!user || !selected || (!text.trim() && !attachments.length) || !selected.recipientId) return;
     const message = text.trim();
-    setText("");
-    setSending(true);
     if (attachments.length) {
-      setSending(false);
-      setText(message);
       showMessageSchemaError({ message: "attachment_names column is missing" });
       return;
     }
+    const createdAt = new Date().toISOString();
+    const tempMessage: MessageRow = {
+      id: `temp-${Date.now()}`,
+      sender_id: user.id,
+      recipient_id: selected.type === "direct" ? selected.recipientId : undefined,
+      request_id: selected.type === "request" ? selected.requestId : undefined,
+      message,
+      created_at: createdAt,
+      delivery_status: "sending",
+      read_by: [user.id],
+      reply_to_id: replyTo?.id.endsWith("-initial") ? null : replyTo?.id ?? null,
+    };
+    setText("");
+    setSending(true);
+    updateThreadWithMessage(tempMessage);
+    window.localStorage.removeItem(`${draftPrefix}${selected.id}`);
+    window.setTimeout(scrollToBottom, 40);
     const payload: Record<string, unknown> = {
       sender_id: user.id,
       message,
@@ -500,20 +699,43 @@ function MessagesPage() {
     setSending(false);
     if (result.error) {
       showMessageSchemaError(result.error);
-      setText(message);
+      setThreads((current) => current.map((thread) => thread.id === selected.id ? {
+        ...thread,
+        messages: thread.messages.map((item) => item.id === tempMessage.id ? { ...item, delivery_status: "failed" } : item),
+      } : thread));
       return;
     }
+    updateThreadWithMessage(result.data as MessageRow, { replaceTempId: tempMessage.id });
     clearAttachments();
     setReplyTo(null);
-    window.localStorage.removeItem(`${draftPrefix}${selected.id}`);
     if (!muted.has(selected.id)) {
-      await supabase.from("notifications").insert({
-        user_id: selected.recipientId,
-        title: selected.type === "direct" ? "New direct message" : "New request message",
-        message: selected.type === "direct" ? "You received a profile message." : `${selected.title} has a new message.`,
-      });
+      if (selected.type === "direct") {
+        await insertNotification(directMessageNotification({
+          userId: selected.recipientId,
+          senderId: user.id,
+          receiverId: selected.recipientId,
+          senderName: profile?.full_name || profile?.username || user.email || "SyncUp user",
+          senderAvatar: profile?.avatar_url ?? null,
+          conversationId: selected.id,
+          messageId: (result.data as MessageRow).id,
+          messagePreview: message,
+        }));
+      } else {
+        await insertNotification({
+          user_id: selected.recipientId,
+          title: "New request message",
+          message: `${selected.title} has a new message.`,
+          metadata: {
+            type: "request_message",
+            senderId: user.id,
+            senderName: profile?.full_name || profile?.username || user.email || "SyncUp user",
+            senderAvatar: profile?.avatar_url ?? null,
+            conversationId: selected.id,
+            messagePreview: message,
+          },
+        });
+      }
     }
-    await loadThreads({ silent: true });
     setSelectedId(selected.id);
     window.setTimeout(scrollToBottom, 60);
   };
@@ -542,25 +764,47 @@ function MessagesPage() {
   const deleteMessageForMe = async (message: MessageRow) => {
     if (!user || !selected || message.id.endsWith("-initial")) return;
     const table = selected.type === "direct" ? "direct_messages" : "join_request_messages";
-    const deletedFor = Array.from(new Set([...(message.deleted_for ?? []), user.id]));
-    const { error } = await (supabase as any).from(table).update({ deleted_for: deletedFor }).eq("id", message.id);
-    if (error) toast.error(error.message);
     setOpenMessageMenuId(null);
+    const deletedFor = Array.from(new Set([...(message.deleted_for ?? []), user.id]));
+    removeMessageFromThread(selected.id, message.id);
+    const { error } = await (supabase as any).from(table).update({ deleted_for: deletedFor }).eq("id", message.id);
+    if (error) {
+      toast.error(error.message);
+      await loadThreads({ silent: true });
+      return;
+    }
+    toast.success("Message deleted for you.");
     await loadThreads({ silent: true });
   };
 
   const deleteMessageForEveryone = async (message: MessageRow) => {
     if (!user || !selected || message.sender_id !== user.id || message.id.endsWith("-initial")) return;
+    const confirmed = window.confirm("Delete this message for everyone? Others will no longer be able to see it.");
+    if (!confirmed) return;
     const table = selected.type === "direct" ? "direct_messages" : "join_request_messages";
-    const { error } = await (supabase as any).from(table).update({ deleted_for_everyone: true }).eq("id", message.id);
-    if (error) toast.error(error.message);
     setOpenMessageMenuId(null);
+    const deletedAt = new Date().toISOString();
+    const deletedMessage = { ...message, message: "", deleted_for_everyone: true, deleted_at: deletedAt, deleted_by: user.id };
+    updateThreadWithMessage(deletedMessage);
+    const result = await updateMessageWithFallback(
+      table,
+      message.id,
+      { message: "", deleted_for_everyone: true, deleted_at: deletedAt, deleted_by: user.id },
+      { message: "", deleted_for_everyone: true },
+    );
+    const error = result.error;
+    if (error) {
+      toast.error(error.message);
+      await loadThreads({ silent: true });
+      return;
+    }
+    toast.success("Message deleted for everyone.");
     await loadThreads({ silent: true });
   };
 
   const deleteConversationForMe = async () => {
     if (!user || !selected) return;
-    const confirmed = window.confirm("Delete this chat from your inbox?");
+    const confirmed = window.confirm("Clear this chat for you? Other people will still keep their messages.");
     if (!confirmed) return;
 
     const removableMessages = selected.messages.filter((message) => !message.id.endsWith("-initial"));
@@ -568,7 +812,6 @@ function MessagesPage() {
     setThreads((current) => current.filter((thread) => thread.id !== selected.id));
     setSelectedId((current) => current === selected.id ? null : current);
     setChatOpen(false);
-    setPinnedOpen(false);
     setReplyTo(null);
     setEditing(null);
     setText("");
@@ -580,8 +823,23 @@ function MessagesPage() {
       return (supabase as any).from(table).update({ deleted_for: deletedFor }).eq("id", message.id);
     }));
 
-    toast.success("Chat deleted from your inbox.");
+    toast.success("Chat cleared for you.");
     await loadThreads({ silent: true });
+  };
+
+  const removeMessageFromThread = (threadId: string, messageId: string) => {
+    setThreads((current) => current.map((thread) => {
+      if (thread.id !== threadId) return thread;
+      const messages = thread.messages.filter((item) => item.id !== messageId);
+      const last = messages[messages.length - 1];
+      return {
+        ...thread,
+        messages,
+        subtitle: last?.message || attachmentSubtitle(last) || "No messages yet",
+        updatedAt: last?.created_at ?? thread.updatedAt,
+        unreadCount: user ? messages.filter((item) => isUnread(item, user.id)).length : thread.unreadCount,
+      };
+    }).filter((thread) => thread.messages.length || thread.id !== threadId));
   };
 
   const decideRequest = async (status: "accepted" | "rejected") => {
@@ -615,56 +873,6 @@ function MessagesPage() {
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : "Could not update request.");
     }
-  };
-
-  const toggleReaction = async (message: MessageRow, reaction: string) => {
-    if (!user || !selected || message.id.endsWith("-initial")) return;
-    const next = normalizeReactions(message.reactions);
-    const users = new Set(next[reaction] ?? []);
-    users.has(user.id) ? users.delete(user.id) : users.add(user.id);
-    next[reaction] = [...users];
-    const table = selected.type === "direct" ? "direct_messages" : "join_request_messages";
-    setOpenMessageMenuId(null);
-    setThreads((current) => current.map((thread) => thread.id === selected.id ? {
-      ...thread,
-      messages: thread.messages.map((item) => item.id === message.id ? { ...item, reactions: next } : item),
-    } : thread));
-    const { error } = await (supabase as any).from(table).update({ reactions: next }).eq("id", message.id);
-    if (error) {
-      if (isMissingMessageMetadata(error)) {
-        saveLocalReactionFallback(user.id, message.id, next);
-        return;
-      }
-      toast.error(error.message);
-      await loadThreads({ silent: true });
-      return;
-    }
-    await loadThreads({ silent: true });
-  };
-
-  const togglePin = async (message: MessageRow) => {
-    if (!user || !selected || message.id.endsWith("-initial")) return;
-    const pins = new Set(message.pinned_by ?? []);
-    pins.has(user.id) ? pins.delete(user.id) : pins.add(user.id);
-    const table = selected.type === "direct" ? "direct_messages" : "join_request_messages";
-    const nextPins = [...pins];
-    setOpenMessageMenuId(null);
-    setPinnedOpen(nextPins.length > 0);
-    setThreads((current) => current.map((thread) => thread.id === selected.id ? {
-      ...thread,
-      messages: thread.messages.map((item) => item.id === message.id ? { ...item, pinned_by: nextPins } : item),
-    } : thread));
-    if (message.id.endsWith("-initial")) {
-      saveLocalPinFallback(user.id, message.id, nextPins);
-      return;
-    }
-    const { error } = await (supabase as any).from(table).update({ pinned_by: nextPins }).eq("id", message.id);
-    if (error) {
-      saveLocalPinFallback(user.id, message.id, nextPins);
-      if (!isMissingMessageMetadata(error)) toast.info("Pinned on this device. Supabase blocked the shared pin update.");
-      return;
-    }
-    await loadThreads({ silent: true });
   };
 
   const uploadAttachments = async (items: AttachmentDraft[]) => {
@@ -743,7 +951,7 @@ function MessagesPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const media = window.matchMedia("(max-width: 1023px)");
+    const media = window.matchMedia("(max-width: 767px)");
     const syncLayout = () => {
       setCompactChat(media.matches);
       if (!media.matches) setChatOpen(false);
@@ -754,20 +962,20 @@ function MessagesPage() {
   }, []);
 
   return (
-    <section className="space-y-6">
-      <div className="glass-strong neon-border rounded-2xl p-5">
-        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+    <section className="flex h-[calc(100svh-5.75rem)] w-full min-h-0 flex-col gap-4 overflow-hidden">
+      <div className="glass-strong neon-border shrink-0 rounded-2xl px-4 py-3 sm:px-6 sm:py-4">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div>
-            <h1 className="flex items-center gap-3 text-3xl font-bold">
-              <MessageSquare className="h-7 w-7 text-cyan-300" />
+            <h1 className="flex items-center gap-3 text-2xl font-bold sm:text-3xl">
+              <MessageSquare className="h-6 w-6 text-cyan-300 sm:h-7 sm:w-7" />
               Messages
               {unreadTotal > 0 && <span className="rounded-full bg-cyan-300 px-2.5 py-1 text-xs font-bold text-[#0B0F19]">{unreadTotal}</span>}
             </h1>
-            <p className="mt-2 text-white/55">Direct messages and team request conversations.</p>
+            <p className="mt-1 text-sm text-white/55 sm:text-base">Direct messages and team request conversations.</p>
           </div>
           <button
             onClick={toggleSound}
-            className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${
+            className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition ${
               soundEnabled ? "border-cyan-300/30 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10"
             }`}
           >
@@ -777,69 +985,67 @@ function MessagesPage() {
         </div>
       </div>
 
-      <div className="grid min-h-[calc(100svh-11rem)] min-w-0 gap-4 lg:grid-cols-[0.36fr_0.64fr] lg:gap-6">
-        <aside className="glass-strong min-w-0 rounded-2xl p-3 sm:p-4">
-          <div className="relative mb-4">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-white/35" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-cyan-300"
-              placeholder="Search people, messages, teams, requests..."
-            />
-          </div>
-          <div className="mb-4 grid grid-cols-4 gap-1 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px] font-semibold sm:text-xs">
-            {([
-              ["all", "All"],
-              ["direct", "Direct"],
-              ["requests", "Requests"],
-              ["unread", "Unread"],
-            ] as Array<[InboxFilter, string]>).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={`rounded-lg px-2 py-2 transition ${filter === key ? "bg-cyan-300 text-[#0B0F19]" : "text-white/55 hover:bg-white/10 hover:text-white"}`}
-              >
-                {label}{filterCounts[key] ? ` ${filterCounts[key]}` : ""}
-              </button>
-            ))}
-          </div>
-
-          {loading ? (
-            <ThreadSkeleton />
-          ) : visibleThreads.length ? (
-            <div className="space-y-2">
-              {visibleThreads.map((thread) => (
-                <ThreadCard
-                  key={thread.id}
-                  thread={thread}
-                  active={selected?.id === thread.id}
-                  presence={thread.profileId ? presence.get(thread.profileId) : undefined}
-                  typingNames={typingRows.filter((row) => row.thread_id === thread.id && row.user_id !== user?.id && +new Date(row.expires_at) > Date.now()).map((row) => profiles.get(row.user_id)?.full_name || "Someone")}
-                  muted={muted.has(thread.id)}
-                  onOpen={() => {
-                    setSelectedId(thread.id);
-                    if (compactChat) setChatOpen(true);
-                  }}
-                />
+      <div className="grid min-h-0 flex-1 min-w-0 gap-4 overflow-hidden md:grid-cols-[340px_minmax(0,1fr)] lg:grid-cols-[380px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
+        <aside className="glass-strong flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl">
+          <div className="shrink-0 border-b border-white/10 p-3 sm:p-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-3 h-4 w-4 text-white/35" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-cyan-300"
+                placeholder="Search people, messages, teams, requests..."
+              />
+            </div>
+            <div className="mt-4 grid grid-cols-4 gap-1 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px] font-semibold sm:text-xs">
+              {([
+                ["all", "All"],
+                ["direct", "Direct"],
+                ["requests", "Requests"],
+                ["unread", "Unread"],
+              ] as Array<[InboxFilter, string]>).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setFilter(key)}
+                  className={`rounded-lg px-2 py-2 transition ${filter === key ? "bg-cyan-300 text-[#0B0F19]" : "text-white/55 hover:bg-white/10 hover:text-white"}`}
+                >
+                  {label}{filterCounts[key] ? ` ${filterCounts[key]}` : ""}
+                </button>
               ))}
             </div>
-          ) : (
-            <EmptyInbox filter={filter} query={query} />
-          )}
+          </div>
+
+          <div className="messages-scroll min-h-0 flex-1 space-y-2 overflow-y-auto p-3 sm:p-4">
+            {loading ? (
+              <ThreadSkeleton />
+            ) : visibleThreads.length ? (
+              visibleThreads.map((thread) => (
+                  <ThreadCard
+                    key={thread.id}
+                    thread={thread}
+                    active={selected?.id === thread.id}
+                    typingNames={typingRows.filter((row) => row.thread_id === thread.id && row.user_id !== user?.id && +new Date(row.expires_at) > Date.now()).map((row) => profiles.get(row.user_id)?.full_name || "Someone")}
+                    muted={muted.has(thread.id)}
+                    onOpen={() => {
+                      setSelectedId(thread.id);
+                      if (compactChat) setChatOpen(true);
+                    }}
+                  />
+                ))
+            ) : (
+              <EmptyInbox filter={filter} query={query} />
+            )}
+          </div>
         </aside>
 
-        <section className="glass-strong hidden min-w-0 overflow-hidden rounded-2xl lg:flex">
+        <section className="glass-strong hidden h-full min-h-0 min-w-0 overflow-hidden rounded-2xl md:flex">
           {selected ? (
             <Conversation
               selected={selected}
               userId={user?.id}
               profiles={profiles}
-              presence={selected.profileId ? presence.get(selected.profileId) : undefined}
               query={query}
               muted={muted.has(selected.id)}
-              pinnedMessages={pinnedMessages}
-              pinnedOpen={pinnedOpen}
               selectedTyping={selectedTyping}
               text={text}
               sending={sending}
@@ -857,7 +1063,6 @@ function MessagesPage() {
               }}
               onSubmit={activeSubmit}
               onProfileOpen={(profile) => setQuickProfile(profile)}
-              onPinnedToggle={() => setPinnedOpen(!pinnedOpen)}
               onMute={() => toggleThreadSet(muteKey, selected.id, muted.has(selected.id) ? "Conversation unmuted." : "Conversation muted.")}
               onDeleteConversation={deleteConversationForMe}
               onAcceptRequest={() => decideRequest("accepted")}
@@ -883,8 +1088,6 @@ function MessagesPage() {
               onCopy={(message) => navigator.clipboard.writeText(message.message)}
               onDeleteMe={deleteMessageForMe}
               onDeleteAll={deleteMessageForEveryone}
-              onPin={togglePin}
-              onReaction={toggleReaction}
               onMenu={setOpenMessageMenuId}
               onAttach={addAttachments}
               onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, i) => i !== index))}
@@ -897,16 +1100,13 @@ function MessagesPage() {
       </div>
 
       {compactChat && chatOpen && selected && (
-        <div className="message-mobile-sheet fixed inset-x-0 bottom-0 top-16 z-[45] overflow-hidden lg:hidden">
+        <div className="message-mobile-sheet fixed inset-x-0 bottom-0 top-16 z-[45] overflow-hidden md:hidden">
           <Conversation
             selected={selected}
             userId={user?.id}
             profiles={profiles}
-            presence={selected.profileId ? presence.get(selected.profileId) : undefined}
             query={query}
             muted={muted.has(selected.id)}
-            pinnedMessages={pinnedMessages}
-            pinnedOpen={pinnedOpen}
             selectedTyping={selectedTyping}
             text={text}
             sending={sending}
@@ -924,7 +1124,6 @@ function MessagesPage() {
             }}
             onSubmit={activeSubmit}
             onProfileOpen={(profile) => setQuickProfile(profile)}
-            onPinnedToggle={() => setPinnedOpen(!pinnedOpen)}
             onMute={() => toggleThreadSet(muteKey, selected.id, muted.has(selected.id) ? "Conversation unmuted." : "Conversation muted.")}
             onDeleteConversation={deleteConversationForMe}
             onAcceptRequest={() => decideRequest("accepted")}
@@ -950,8 +1149,6 @@ function MessagesPage() {
             onCopy={(message) => navigator.clipboard.writeText(message.message)}
             onDeleteMe={deleteMessageForMe}
             onDeleteAll={deleteMessageForEveryone}
-            onPin={togglePin}
-            onReaction={toggleReaction}
             onMenu={setOpenMessageMenuId}
             onAttach={addAttachments}
             onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, i) => i !== index))}
@@ -975,11 +1172,8 @@ function Conversation({
   selected,
   userId,
   profiles,
-  presence,
   query,
   muted,
-  pinnedMessages,
-  pinnedOpen,
   selectedTyping,
   text,
   sending,
@@ -994,7 +1188,6 @@ function Conversation({
   onTextChange,
   onSubmit,
   onProfileOpen,
-  onPinnedToggle,
   onMute,
   onDeleteConversation,
   onAcceptRequest,
@@ -1009,8 +1202,6 @@ function Conversation({
   onCopy,
   onDeleteMe,
   onDeleteAll,
-  onPin,
-  onReaction,
   onMenu,
   onAttach,
   onRemoveAttachment,
@@ -1019,11 +1210,8 @@ function Conversation({
   selected: Thread;
   userId?: string;
   profiles: Map<string, Profile>;
-  presence?: Presence;
   query: string;
   muted: boolean;
-  pinnedMessages: MessageRow[];
-  pinnedOpen: boolean;
   selectedTyping: string[];
   text: string;
   sending: boolean;
@@ -1038,7 +1226,6 @@ function Conversation({
   onTextChange: (value: string) => void;
   onSubmit: (event: React.FormEvent) => void;
   onProfileOpen: (profile: Profile) => void;
-  onPinnedToggle: () => void;
   onMute: () => void;
   onDeleteConversation: () => void;
   onAcceptRequest: () => void;
@@ -1053,8 +1240,6 @@ function Conversation({
   onCopy: (message: MessageRow) => void;
   onDeleteMe: (message: MessageRow) => void;
   onDeleteAll: (message: MessageRow) => void;
-  onPin: (message: MessageRow) => void;
-  onReaction: (message: MessageRow, reaction: string) => void;
   onMenu: (id: string | null) => void;
   onAttach: (files: FileList | File[]) => void;
   onRemoveAttachment: (index: number) => void;
@@ -1078,7 +1263,7 @@ function Conversation({
         toast.info("Attachments are not enabled for this workspace yet.");
       }}
     >
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/10 p-3 sm:gap-3 sm:p-4">
+      <div className="shrink-0 flex min-w-0 items-center justify-between gap-2 border-b border-white/10 p-3 sm:gap-3 sm:p-4">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {onBack && (
             <button onClick={onBack} className="shrink-0 rounded-xl p-2 hover:bg-white/10">
@@ -1096,13 +1281,14 @@ function Conversation({
                 ? `${otherProfile?.full_name || otherProfile?.username || "Applicant"} - ${selected.teamName || "Team request"}`
                 : otherProfile?.role || otherProfile?.college || "Direct message"}
             </p>
-            {selected.type === "direct" && <PresenceLine presence={presence} typing={selectedTyping} />}
+            {selected.type === "direct" && selectedTyping.length > 0 && (
+              <span className="flex items-center gap-2 text-xs text-cyan-200">
+                {selectedTyping.join(", ")} {selectedTyping.length === 1 ? "is" : "are"} typing <TypingDots />
+              </span>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 gap-1.5 sm:gap-2">
-          <button onClick={onPinnedToggle} className="rounded-xl border border-white/10 bg-white/5 p-2 hover:bg-white/10" title="Pinned messages">
-            <Pin className="h-4 w-4" />
-          </button>
           <button onClick={onMute} className={`rounded-xl border border-white/10 p-2 hover:bg-white/10 ${muted ? "bg-cyan-300/15 text-cyan-100" : "bg-white/5"}`} title="Mute">
             <BellOff className="h-4 w-4" />
           </button>
@@ -1113,7 +1299,7 @@ function Conversation({
       </div>
 
       {selected.type === "request" && (
-        <div className="border-b border-white/10 bg-cyan-300/5 p-3 sm:p-4">
+        <div className="shrink-0 border-b border-white/10 bg-cyan-300/5 p-3 sm:p-4">
           <div className="flex flex-col gap-3 rounded-2xl border border-cyan-300/15 bg-white/[0.03] p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -1146,20 +1332,7 @@ function Conversation({
         </div>
       )}
 
-      {pinnedOpen && (
-        <div className="border-b border-white/10 bg-white/[0.03] p-3">
-          <p className="mb-2 text-xs font-semibold text-white/50">Pinned messages</p>
-          <div className="flex gap-2 overflow-x-auto">
-            {pinnedMessages.length ? pinnedMessages.map((message) => (
-              <button key={message.id} onClick={() => onScrollMessage(message.id)} className="max-w-xs shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-xs text-white/70 hover:bg-white/10">
-                {message.message || attachmentSubtitle(message)}
-              </button>
-            )) : <p className="text-sm text-white/45">No pinned messages yet.</p>}
-          </div>
-        </div>
-      )}
-
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4">
+      <div ref={scrollRef} onScroll={onScroll} className="messages-scroll min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4">
         {selected.messages.length ? selected.messages.map((message, index) => {
           const prev = selected.messages[index - 1];
           const showDate = !prev || dateLabel(prev.created_at) !== dateLabel(message.created_at);
@@ -1186,8 +1359,6 @@ function Conversation({
                 onCopy={onCopy}
                 onDeleteMe={onDeleteMe}
                 onDeleteAll={onDeleteAll}
-                onPin={onPin}
-                onReaction={onReaction}
                 onMenu={onMenu}
               />
             </div>
@@ -1234,30 +1405,60 @@ function MessageBubble(props: {
   onCopy: (message: MessageRow) => void;
   onDeleteMe: (message: MessageRow) => void;
   onDeleteAll: (message: MessageRow) => void;
-  onPin: (message: MessageRow) => void;
-  onReaction: (message: MessageRow, reaction: string) => void;
   onMenu: (id: string | null) => void;
 }) {
   const { message, own, grouped, profile, thread, query, reply, openMenu } = props;
   const deleted = Boolean(message.deleted_for_everyone);
+  const sharedPost = parseSharedPostMessage(message.message);
+  const actionButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!openMenu || typeof window === "undefined") return;
+
+    const updateMenuPosition = () => {
+      const rect = actionButtonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const menuWidth = 224;
+      const menuHeight = own ? 218 : 150;
+      const gutter = 12;
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const top = spaceBelow < menuHeight + gutter
+        ? Math.max(gutter, rect.top - menuHeight - 8)
+        : Math.min(window.innerHeight - menuHeight - gutter, rect.bottom + 8);
+      const preferredLeft = own ? rect.right - menuWidth : rect.left;
+      const left = Math.min(window.innerWidth - menuWidth - gutter, Math.max(gutter, preferredLeft));
+
+      setMenuPosition({ top, left });
+    };
+
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [openMenu, own]);
+
+  const closeAfter = (action: () => void) => {
+    action();
+    props.onMenu(null);
+  };
+
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={`group flex items-end gap-2 ${own ? "justify-end" : "justify-start"} ${grouped ? "mt-1" : "mt-3"}`}>
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={`group flex gap-2 sm:gap-3 ${own ? "justify-end" : "justify-start"} ${grouped ? "mt-1" : "mt-3"}`}>
       {!own && !grouped ? (
-        <button onClick={() => profile && props.onProfileOpen(profile)} className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-[11px] font-bold ring-1 ring-white/10">
-          {profile?.avatar_url ? <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(profile ?? { full_name: thread.title, username: null } as Profile)}
+        <button onClick={() => profile && props.onProfileOpen(profile)} className="mt-1 shrink-0">
+          <SafeAvatar profile={profile ?? ({ full_name: thread.title, username: null } as Profile)} className="h-9 w-9 text-[11px]" />
         </button>
-      ) : <span className="h-8 w-8 shrink-0" />}
-      <div className={`relative min-w-0 max-w-[calc(100vw-5.5rem)] sm:max-w-[82%] ${own ? "items-end" : "items-start"}`}>
-        <div className={`relative rounded-2xl px-3 py-2.5 text-sm sm:px-4 sm:py-3 ${own ? "message-bubble-own bg-cyan-300/20 text-cyan-50" : "message-bubble-other bg-white/8 text-white/75"} ${grouped ? own ? "rounded-tr-md" : "rounded-tl-md" : ""}`}>
-          <button onClick={() => props.onMenu(openMenu ? null : message.id)} className="message-action-button absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-lg border border-white/10 sm:hidden" title="Message actions">
+      ) : !own ? <span className="h-9 w-9 shrink-0" /> : null}
+      <div className={`relative min-w-0 ${sharedPost ? "w-fit max-w-[85%] sm:max-w-[680px]" : "max-w-[85%] sm:max-w-[620px]"} ${own ? "ml-auto" : "mr-auto"}`}>
+        <div className={`relative rounded-2xl px-3 py-2.5 text-sm shadow-sm sm:px-4 sm:py-3 ${own ? "message-bubble-own bg-cyan-300/20 text-cyan-50" : "message-bubble-other bg-white/8 text-white/75"} ${grouped ? own ? "rounded-tr-md" : "rounded-tl-md" : ""}`}>
+          <button ref={actionButtonRef} onClick={() => props.onMenu(openMenu ? null : message.id)} className="message-action-button absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-lg border border-white/10 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100" title="Message actions">
             <MoreVertical className="h-4 w-4" />
           </button>
-          {(message.pinned_by ?? []).length > 0 && (
-            <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-cyan-300/15 px-2 py-0.5 text-[10px] font-semibold text-cyan-100">
-              <Pin className="h-3 w-3" />
-              Pinned
-            </div>
-          )}
           {reply && (
             <button onClick={() => props.onScrollMessage(reply.id)} className="mb-2 block w-full rounded-lg border-l-2 border-cyan-300 bg-black/15 px-3 py-2 text-left text-xs text-white/55">
               Replying to: {reply.message || attachmentSubtitle(reply)}
@@ -1265,43 +1466,31 @@ function MessageBubble(props: {
           )}
           {deleted ? (
             <p className="italic text-white/45">This message was deleted</p>
+          ) : sharedPost ? (
+            <SharedPostPreview sharedPost={sharedPost} query={query} />
           ) : message.message && (
             <p className="whitespace-pre-wrap break-words pr-6 [overflow-wrap:anywhere] sm:pr-0">{highlight(message.message, query)}</p>
           )}
           {!deleted && <Attachments message={message} />}
-          <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-white/35">
+          <div className={`mt-2 flex items-center gap-2 text-[10px] text-white/35 ${own ? "justify-end" : "justify-start"}`}>
             {message.edited_at && <span>edited</span>}
             <span>{smartTime(message.created_at)}</span>
             {own && <ReadReceipt message={message} />}
           </div>
         </div>
-        {!deleted && <ReactionCounts message={message} onReaction={(reaction) => props.onReaction(message, reaction)} />}
-        {!deleted && <div className={`absolute top-0 hidden gap-1 sm:group-hover:flex ${own ? "right-full mr-2" : "left-full ml-2"}`}>
-          <IconButton title="Reply" icon={Reply} onClick={() => props.onReply(message)} />
-          <IconButton title="React" icon={SmilePlus} onClick={() => props.onMenu(openMenu ? null : message.id)} />
-          <IconButton title="Copy" icon={Copy} onClick={() => props.onCopy(message)} />
-          <IconButton title={(message.pinned_by ?? []).length ? "Unpin" : "Pin"} icon={Pin} onClick={() => props.onPin(message)} />
-          {own && <IconButton title="Edit" icon={Edit3} onClick={() => props.onEdit(message)} />}
-          <IconButton title="More" icon={MoreVertical} onClick={() => props.onMenu(openMenu ? null : message.id)} />
-        </div>}
-        {!deleted && openMenu && (
-          <div className={`message-action-menu absolute top-9 z-20 w-56 rounded-xl border border-white/10 p-2 shadow-2xl ${own ? "right-0" : "left-0"}`}>
-            <div className="mb-2 flex gap-1 px-1">
-              {reactions.map((reaction) => (
-                <button key={reaction} onClick={() => props.onReaction(message, reaction)} className="rounded-lg p-1.5 hover:bg-white/10">{reaction}</button>
-              ))}
-            </div>
-            <MenuButton icon={Reply} label="Reply" onClick={() => props.onReply(message)} />
-            <MenuButton icon={Copy} label="Copy" onClick={() => props.onCopy(message)} />
-            <MenuButton icon={Pin} label={(message.pinned_by ?? []).length ? "Unpin" : "Pin"} onClick={() => props.onPin(message)} />
-            <MenuButton icon={Trash2} label="Delete for me" onClick={() => props.onDeleteMe(message)} />
+        {!deleted && openMenu && menuPosition && typeof document !== "undefined" && createPortal(
+          <div className="message-action-menu fixed z-[9999] w-56 rounded-xl border border-white/10 bg-[#0B0F19]/95 p-2 shadow-2xl backdrop-blur-xl" style={{ top: menuPosition.top, left: menuPosition.left }}>
+            <MenuButton icon={Reply} label="Reply" onClick={() => closeAfter(() => props.onReply(message))} />
+            <MenuButton icon={Copy} label="Copy" onClick={() => closeAfter(() => props.onCopy(message))} />
+            <MenuButton icon={Trash2} label="Delete for me" onClick={() => closeAfter(() => props.onDeleteMe(message))} />
             {own && (
               <>
-                <MenuButton icon={Edit3} label="Edit" onClick={() => props.onEdit(message)} />
-                <MenuButton icon={Trash2} label="Delete for everyone" danger onClick={() => props.onDeleteAll(message)} />
+                <MenuButton icon={Edit3} label="Edit" onClick={() => closeAfter(() => props.onEdit(message))} />
+                <MenuButton icon={Trash2} label="Delete for everyone" danger onClick={() => closeAfter(() => props.onDeleteAll(message))} />
               </>
             )}
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     </motion.div>
@@ -1321,7 +1510,7 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
   onRemoveAttachment: (index: number) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="message-composer sticky bottom-0 border-t border-white/10 p-3 backdrop-blur-xl sm:p-4">
+    <form onSubmit={onSubmit} className="message-composer shrink-0 border-t border-white/10 p-3 backdrop-blur-xl sm:p-4">
       {(editing || replyTo) && (
         <div className="mb-3 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm">
           <span className="truncate text-white/60">{editing ? "Editing message" : `Replying to: ${replyTo?.message || attachmentSubtitle(replyTo)}`}</span>
@@ -1340,9 +1529,6 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
         </div>
       )}
       <div className="flex min-w-0 items-end gap-2 sm:gap-3">
-        <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/5 text-white/45 hover:bg-white/10" title="Emoji reactions are available from message menus">
-          <SmilePlus className="h-5 w-5" />
-        </button>
         <textarea
           value={text}
           onChange={(event) => onTextChange(event.target.value)}
@@ -1365,13 +1551,16 @@ function Composer({ text, sending, editing, replyTo, attachments, onSubmit, onTe
   );
 }
 
-function ThreadCard({ thread, active, presence, typingNames, muted, onOpen }: { thread: Thread; active: boolean; presence?: Presence; typingNames: string[]; muted: boolean; onOpen: () => void }) {
+function ThreadCard({ thread, active, typingNames, muted, onOpen }: { thread: Thread; active: boolean; typingNames: string[]; muted: boolean; onOpen: () => void }) {
   return (
     <button onClick={onOpen} className={`w-full overflow-hidden rounded-2xl border p-3 text-left transition sm:p-4 ${active ? "border-cyan-300/50 bg-cyan-300/10" : thread.unreadCount ? "border-cyan-300/30 bg-cyan-300/5" : "border-white/10 bg-white/5 hover:bg-white/10"}`}>
       <div className="flex items-center gap-3">
-        <span className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-sm font-bold ring-1 ring-white/10 sm:h-11 sm:w-11">
-          {thread.avatarUrl ? <img src={thread.avatarUrl} alt="" className="h-full w-full object-cover" /> : thread.profileId ? initials({ full_name: thread.title, username: null } as Profile) : <Users className="h-4 w-4" />}
-          {presence && <span className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ring-2 ring-[#0B0F19] ${presenceColor(presence)}`} />}
+        <span className="relative h-10 w-10 shrink-0 sm:h-11 sm:w-11">
+          <SafeAvatar
+            user={{ avatarUrl: thread.avatarUrl, full_name: thread.title }}
+            fallbackIcon={!thread.profileId ? <Users className="h-4 w-4" /> : undefined}
+            className="h-full w-full text-sm"
+          />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center justify-between gap-2">
@@ -1399,8 +1588,12 @@ function ThreadCard({ thread, active, presence, typingNames, muted, onOpen }: { 
 
 function AvatarButton({ thread, profile, onOpen }: { thread: Thread; profile?: Profile; onOpen: (profile: Profile) => void }) {
   return (
-    <button onClick={() => profile && onOpen(profile)} className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 text-sm font-bold ring-1 ring-white/10 sm:h-12 sm:w-12 sm:text-base">
-      {thread.avatarUrl ? <img src={thread.avatarUrl} alt="" className="h-full w-full object-cover" /> : thread.profileId ? initials({ full_name: thread.title, username: null } as Profile) : <Users className="h-5 w-5" />}
+    <button onClick={() => profile && onOpen(profile)} className="shrink-0">
+      <SafeAvatar
+        user={{ avatarUrl: thread.avatarUrl, full_name: thread.title }}
+        fallbackIcon={!thread.profileId ? <Users className="h-5 w-5" /> : undefined}
+        className="h-10 w-10 text-sm sm:h-12 sm:w-12 sm:text-base"
+      />
     </button>
   );
 }
@@ -1413,9 +1606,7 @@ function ProfileDrawer({ profile, threads, onClose }: { profile: Profile; thread
         <button onClick={onClose} className="rounded-xl p-2 hover:bg-white/10"><X className="h-5 w-5" /></button>
       </div>
       <div className="text-center">
-        <div className="mx-auto grid h-24 w-24 place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-cyan-400 to-purple-500 text-2xl font-bold">
-          {profile.avatar_url ? <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(profile)}
-        </div>
+        <SafeAvatar profile={profile} className="mx-auto h-24 w-24 text-2xl" />
         <h2 className="mt-4 text-2xl font-bold">{profile.full_name || profile.username || "SyncUp user"}</h2>
         <p className="text-sm text-cyan-200">@{profile.username || "profile"}</p>
       </div>
@@ -1458,25 +1649,27 @@ function Attachments({ message }: { message: MessageRow }) {
   );
 }
 
-function ReactionCounts({ message, onReaction }: { message: MessageRow; onReaction: (reaction: string) => void }) {
-  const entries = Object.entries(normalizeReactions(message.reactions)).filter(([, users]) => users.length);
-  if (!entries.length) return null;
+function SharedPostPreview({ sharedPost, query }: { sharedPost: SharedPostMessage; query: string }) {
   return (
-    <div className="mt-1 flex flex-wrap gap-1">
-      {entries.map(([reaction, users]) => (
-        <button key={reaction} onClick={() => onReaction(reaction)} className="message-reaction rounded-full border border-white/10 px-2 py-0.5 text-xs" title={users.join(", ")}>
-          {reaction} {users.length}
-        </button>
-      ))}
+    <div className="space-y-3 pr-6 sm:pr-0">
+      <div className="space-y-0.5">
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-cyan-100/70">Shared a SyncUp post</p>
+        <p className="text-sm font-semibold text-white/85">from {sharedPost.author}</p>
+      </div>
+      <div className="rounded-xl border border-white/10 bg-black/15 p-3 text-sm leading-relaxed text-white/80 shadow-inner sm:p-4">
+        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{highlight(sharedPost.content, query)}</p>
+      </div>
     </div>
   );
 }
 
 function ReadReceipt({ message }: { message: MessageRow }) {
+  if (message.delivery_status === "failed") return <span className="text-red-200" title="Failed to send">Failed</span>;
+  if (message.delivery_status === "sending") return <span title="Sending">Sending</span>;
   const readCount = (message.read_by ?? []).filter((id) => id !== message.sender_id).length;
   if (readCount > 0 || message.read) return <span title={`${readCount || 1} read`}><CheckCheck className="h-3.5 w-3.5 text-cyan-200" /></span>;
-  if (message.delivered_at) return <span title="Delivered"><CheckCheck className="h-3.5 w-3.5" /></span>;
-  return <span title="Sent"><Check className="h-3.5 w-3.5" /></span>;
+  if (!message.id.startsWith("temp-")) return <span title="Delivered"><CheckCheck className="h-3.5 w-3.5 text-white/45" /></span>;
+  return <span title="Sent"><Check className="h-3.5 w-3.5 text-white/45" /></span>;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -1487,14 +1680,6 @@ function StatusBadge({ status }: { status: string }) {
       ? "bg-red-400/15 text-red-100"
       : "bg-yellow-300/15 text-yellow-100";
   return <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${className}`}>{status}</span>;
-}
-
-function PresenceLine({ presence, typing }: { presence?: Presence; typing: string[] }) {
-  if (typing.length) return <span className="flex items-center gap-2 text-xs text-cyan-200">{typing.join(", ")} {typing.length === 1 ? "is" : "are"} typing <TypingDots /></span>;
-  if (!presence) return <p className="text-xs text-white/45">Offline</p>;
-  const effective = effectivePresence(presence);
-  const label = effective === "online" ? "Online" : effective === "away" ? "Away" : `Last seen ${smartDateTime(presence.last_seen_at)}`;
-  return <p className="text-xs text-white/45">{label}</p>;
 }
 
 function TypingIndicator({ names }: { names: string[] }) {
@@ -1543,10 +1728,6 @@ function ThreadSkeleton() {
   return <div className="space-y-3">{[1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-2xl bg-white/5" />)}</div>;
 }
 
-function IconButton({ title, icon: Icon, onClick }: { title: string; icon: typeof Reply; onClick: () => void }) {
-  return <button title={title} onClick={onClick} className="message-action-button grid h-8 w-8 place-items-center rounded-lg border border-white/10"><Icon className="h-4 w-4" /></button>;
-}
-
 function MenuButton({ icon: Icon, label, danger, onClick }: { icon: typeof Reply; label: string; danger?: boolean; onClick: () => void }) {
   return <button onClick={onClick} className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs hover:bg-white/10 ${danger ? "text-red-200" : "text-white/75"}`}><Icon className="h-3.5 w-3.5" />{label}</button>;
 }
@@ -1558,13 +1739,83 @@ function highlight(text: string, query: string) {
   return <>{text.slice(0, index)}<mark className="rounded bg-cyan-300 px-0.5 text-[#0B0F19]">{text.slice(index, index + needle.length)}</mark>{text.slice(index + needle.length)}</>;
 }
 
+function getThreadIdForMessage(message: MessageRow, userId: string) {
+  if (message.request_id) return `request-${message.request_id}`;
+  const otherId = message.sender_id === userId ? message.recipient_id : message.sender_id;
+  return otherId ? `direct-${otherId}` : "";
+}
+
+function directProfileIdFromThreadId(conversationId?: string | null) {
+  if (!conversationId?.startsWith("direct-")) return null;
+  return conversationId.slice("direct-".length);
+}
+
+function mergeOptimisticThreads(current: Thread[], incoming: Thread[]) {
+  const next = incoming.map((thread) => {
+    const currentThread = current.find((item) => item.id === thread.id);
+    const optimisticMessages = (currentThread?.messages ?? []).filter((message) => message.id.startsWith("temp-"));
+    if (!optimisticMessages.length) return thread;
+
+    const messages = optimisticMessages.reduce((merged, optimistic) => {
+      const alreadyResolved = merged.some((message) => isMatchingTempMessage(optimistic, message));
+      return alreadyResolved ? merged : mergeThreadMessages(merged, optimistic);
+    }, thread.messages);
+    const last = messages[messages.length - 1];
+
+    return {
+      ...thread,
+      messages,
+      subtitle: last?.message || attachmentSubtitle(last) || thread.subtitle,
+      updatedAt: last?.created_at ?? thread.updatedAt,
+    };
+  });
+
+  const nextIds = new Set(next.map((thread) => thread.id));
+  const optimisticOnlyThreads = current.filter((thread) => !nextIds.has(thread.id) && thread.messages.some((message) => message.id.startsWith("temp-")));
+  return [...next, ...optimisticOnlyThreads].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+}
+
+function isRelevantMessage(message: MessageRow, userId: string, threads: Thread[]) {
+  if (message.request_id) {
+    return threads.some((thread) => thread.id === `request-${message.request_id}`);
+  }
+  return message.sender_id === userId || message.recipient_id === userId;
+}
+
+function mergeThreadMessages(messages: MessageRow[], incoming: MessageRow, replaceTempId?: string) {
+  const next = messages
+    .filter((message) => message.id !== incoming.id)
+    .filter((message) => !replaceTempId || message.id !== replaceTempId)
+    .filter((message) => !isMatchingTempMessage(message, incoming));
+  return [...next, incoming].sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+}
+
+function isMatchingTempMessage(temp: MessageRow, incoming: MessageRow) {
+  if (!temp.id.startsWith("temp-") || incoming.id.startsWith("temp-")) return false;
+  if (temp.sender_id !== incoming.sender_id || temp.message !== incoming.message) return false;
+  if ((temp.recipient_id ?? "") !== (incoming.recipient_id ?? "")) return false;
+  if ((temp.request_id ?? "") !== (incoming.request_id ?? "")) return false;
+  return Math.abs(+new Date(temp.created_at) - +new Date(incoming.created_at)) < 30000;
+}
+
 function isVisibleFor(userId: string) {
   return (message: MessageRow) => !(message.deleted_for ?? []).includes(userId);
 }
 
 function isUnread(message: MessageRow, userId: string) {
+  if (message.deleted_for_everyone || message.deleted_at) return false;
   if (message.sender_id === userId) return false;
   return !(message.read_by ?? []).includes(userId) && !message.read;
+}
+
+function parseSharedPostMessage(value?: string | null): SharedPostMessage | null {
+  if (!value) return null;
+  const match = value.match(/^Shared a SyncUp post from ([^:\n]+):\s*\n+([\s\S]+)$/i);
+  if (!match) return null;
+  const author = match[1]?.trim();
+  const content = match[2]?.trim();
+  if (!author || !content) return null;
+  return { author, content };
 }
 
 function normalizeReactions(value: MessageRow["reactions"]) {
@@ -1572,8 +1823,24 @@ function normalizeReactions(value: MessageRow["reactions"]) {
   return Object.fromEntries(
     Object.entries(value)
       .filter(([, users]) => Array.isArray(users))
-      .map(([reaction, users]) => [reaction, [...new Set(users as string[])]]),
+      .map(([reaction, users]) => [reaction, [...new Set(users as string[])]])
+      .filter(([, users]) => users.length),
   ) as Record<string, string[]>;
+}
+
+function toggleUserReaction(current: Record<string, string[]>, userId: string, reaction: string) {
+  const hadReaction = (current[reaction] ?? []).includes(userId);
+  const next = Object.fromEntries(
+    Object.entries(current)
+      .map(([emoji, users]) => [emoji, users.filter((id) => id !== userId)])
+      .filter(([, users]) => users.length),
+  ) as Record<string, string[]>;
+
+  if (!hadReaction) {
+    next[reaction] = [...new Set([...(next[reaction] ?? []), userId])];
+  }
+
+  return next;
 }
 
 function readLocalReactionFallback(userId: string) {
@@ -1588,33 +1855,13 @@ function readLocalReactionFallback(userId: string) {
 function saveLocalReactionFallback(userId: string, messageId: string, reactionsValue: Record<string, string[]>) {
   if (typeof window === "undefined") return;
   const current = readLocalReactionFallback(userId);
-  current[messageId] = reactionsValue;
+  if (Object.keys(normalizeReactions(reactionsValue)).length) current[messageId] = reactionsValue;
+  else delete current[messageId];
   window.localStorage.setItem(`syncup_local_reactions_${userId}`, JSON.stringify(current));
 }
 
 function applyLocalReactionFallback(message: MessageRow, fallback: Record<string, Record<string, string[]>>) {
   return fallback[message.id] ? { ...message, reactions: fallback[message.id] } : message;
-}
-
-function readLocalPinFallback(userId: string) {
-  if (typeof window === "undefined") return {} as Record<string, string[]>;
-  try {
-    return JSON.parse(window.localStorage.getItem(`syncup_local_pins_${userId}`) ?? "{}") as Record<string, string[]>;
-  } catch {
-    return {};
-  }
-}
-
-function saveLocalPinFallback(userId: string, messageId: string, pinnedBy: string[]) {
-  if (typeof window === "undefined") return;
-  const current = readLocalPinFallback(userId);
-  if (pinnedBy.length) current[messageId] = pinnedBy;
-  else delete current[messageId];
-  window.localStorage.setItem(`syncup_local_pins_${userId}`, JSON.stringify(current));
-}
-
-function applyLocalPinFallback(message: MessageRow, fallback: Record<string, string[]>) {
-  return fallback[message.id] ? { ...message, pinned_by: fallback[message.id] } : message;
 }
 
 function readLocalReadFallback(userId: string) {
@@ -1731,20 +1978,6 @@ function smartTime(value: string) {
 
 function smartDateTime(value: string) {
   return new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function presenceColor(presence: Presence) {
-  const effective = effectivePresence(presence);
-  if (effective === "online") return "bg-emerald-400";
-  if (effective === "away") return "bg-yellow-300";
-  return "bg-gray-400";
-}
-
-function effectivePresence(presence: Presence) {
-  const age = Date.now() - new Date(presence.last_seen_at).getTime();
-  if (age < 2 * 60 * 1000 && presence.status === "online") return "online";
-  if (age < 10 * 60 * 1000 && presence.status !== "offline") return "away";
-  return "offline";
 }
 
 function playMessageSound() {

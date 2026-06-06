@@ -55,5 +55,19 @@ export function useAuth() {
     };
   }, []);
 
+  // Re-fetch profile when a profile update is dispatched elsewhere in the app
+  useEffect(() => {
+    let mounted = true;
+    const handler = async () => {
+      const next = await getCurrentAuthState();
+      if (mounted) setState(next);
+    };
+    window.addEventListener("profile_updated", handler);
+    return () => {
+      mounted = false;
+      window.removeEventListener("profile_updated", handler);
+    };
+  }, []);
+
   return state;
 }

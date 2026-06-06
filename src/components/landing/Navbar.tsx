@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Bell, Bookmark, LayoutDashboard, LogOut, Menu, Moon, Settings, Sparkles, Sun, User, Users, X } from "lucide-react";
+import { Bell, Bookmark, LayoutDashboard, LogOut, Menu, Moon, Settings, Sun, User, Users, X } from "lucide-react";
 import { toast } from "sonner";
+import { BrandLogo } from "@/components/app/BrandLogo";
+import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { useAuth } from "@/hooks/use-auth";
-import { initials } from "@/lib/auth";
 import { supabase } from "@/integrations/supabase/client";
 
 const links = [
@@ -61,15 +62,8 @@ export function Navbar() {
             scrolled ? "glass-strong py-2.5" : "py-3"
           }`}
         >
-          <Link to="/" className="flex items-center gap-2 group">
-            <div className="relative">
-              <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-blue-500 via-purple-500 to-cyan-400 flex items-center justify-center glow-blue">
-                <Sparkles className="h-5 w-5 text-white" />
-              </div>
-            </div>
-            <span className="text-xl font-bold tracking-tight">
-              Sync<span className="text-gradient">Up</span>
-            </span>
+          <Link to="/" className="group flex items-center">
+            <BrandLogo variant="light" />
           </Link>
 
           <nav className="hidden md:flex items-center gap-8">
@@ -109,13 +103,7 @@ export function Navbar() {
                   onClick={() => setProfileOpen(!profileOpen)}
                   className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-1.5 pr-3 transition hover:bg-white/10"
                 >
-                  {profile?.avatar_url ? (
-                    <img src={profile.avatar_url} alt="" className="h-9 w-9 rounded-xl object-cover" />
-                  ) : (
-                    <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 text-sm font-bold">
-                      {initials(profile, user.email)}
-                    </span>
-                  )}
+                  <SafeAvatar profile={profile} fallback={user.email} className="h-9 w-9 text-sm" />
                   <span className="text-sm font-semibold">{profile?.username || user.email}</span>
                 </button>
                 {profileOpen && (

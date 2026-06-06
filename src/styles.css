@@ -139,14 +139,146 @@
 }
 
 .syncup-app.theme-dark {
-  background: #0B0F19;
-  color: #ffffff;
+  background: #0f172a;
+  color: #f9fafb;
 }
 
 .syncup-app.theme-light,
 html[data-theme="light"] .syncup-app {
-  background: #f8fafc;
-  color: #0f172a;
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.dashboard-shell {
+  align-items: start;
+}
+
+.syncup-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #111827;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+html[data-theme="dark"] .syncup-card,
+.syncup-app.theme-dark .syncup-card {
+  border-color: #374151;
+  background: #111827;
+  color: #f9fafb;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+}
+
+.syncup-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  border-radius: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  color: #4b5563;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.syncup-shortcut:hover {
+  background: #f3f4f6;
+  color: #0e7490;
+}
+
+.profile-page {
+  color: #111827;
+}
+
+.profile-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #111827;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.profile-secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 9999px;
+  background: #ffffff;
+  padding: 0.625rem 1rem;
+  color: #374151;
+  font-size: 0.875rem;
+  font-weight: 700;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.profile-secondary-button:hover {
+  border-color: #bae6fd;
+  background: #f0f9ff;
+  color: #0e7490;
+}
+
+.profile-primary-button {
+  background: #0f172a !important;
+  color: #ffffff !important;
+}
+
+.profile-primary-button svg,
+.profile-primary-button span {
+  color: inherit !important;
+}
+
+.profile-primary-button:hover {
+  background: #1e293b !important;
+}
+
+html[data-theme="dark"] .profile-page,
+.syncup-app.theme-dark .profile-page {
+  color: #f9fafb;
+}
+
+html[data-theme="dark"] .profile-card,
+.syncup-app.theme-dark .profile-card {
+  border-color: #374151;
+  background: #111827;
+  color: #f9fafb;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .profile-secondary-button,
+.syncup-app.theme-dark .profile-secondary-button {
+  border-color: #374151;
+  background: #1f2937;
+  color: #d1d5db;
+}
+
+html[data-theme="dark"] .profile-secondary-button:hover,
+.syncup-app.theme-dark .profile-secondary-button:hover {
+  border-color: #0e7490;
+  background: rgba(34, 211, 238, 0.1);
+  color: #67e8f9;
+}
+
+html[data-theme="dark"] .profile-primary-button,
+.syncup-app.theme-dark .profile-primary-button {
+  background: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+html[data-theme="dark"] .profile-primary-button:hover,
+.syncup-app.theme-dark .profile-primary-button:hover {
+  background: #ffffff !important;
+}
+
+html[data-theme="dark"] .syncup-shortcut,
+.syncup-app.theme-dark .syncup-shortcut {
+  color: #9ca3af;
+}
+
+html[data-theme="dark"] .syncup-shortcut:hover,
+.syncup-app.theme-dark .syncup-shortcut:hover {
+  background: #1f2937;
+  color: #67e8f9;
 }
 
 .syncup-app.theme-light header,
@@ -317,9 +449,9 @@ html[data-theme="light"] .syncup-app select {
 
 .syncup-app.theme-light .theme-control,
 html[data-theme="light"] .syncup-app .theme-control {
-  background: #0f172a !important;
-  color: #ffffff !important;
-  border-color: #0f172a !important;
+  background: #ffffff !important;
+  color: #4b5563 !important;
+  border-color: #e5e7eb !important;
 }
 
 .syncup-app.theme-light [class*="bg-gradient-to"].text-white,
@@ -359,6 +491,24 @@ html[data-theme="light"] .syncup-app .text-gradient {
 .message-action-menu button:hover,
 .message-reaction:hover {
   background-color: rgba(255, 255, 255, 0.1);
+}
+
+.messages-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+}
+
+.messages-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messages-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
 }
 
 .syncup-app.theme-light .message-action-button,

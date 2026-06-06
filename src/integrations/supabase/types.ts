@@ -128,24 +128,33 @@ export type Database = {
           created_at: string
           id: string
           message: string | null
+          metadata: Json
           read: boolean
+          target_path: string | null
           title: string
+          type: string | null
           user_id: string
         }
         Insert: {
           created_at?: string
           id?: string
           message?: string | null
+          metadata?: Json
           read?: boolean
+          target_path?: string | null
           title: string
+          type?: string | null
           user_id: string
         }
         Update: {
           created_at?: string
           id?: string
           message?: string | null
+          metadata?: Json
           read?: boolean
+          target_path?: string | null
           title?: string
+          type?: string | null
           user_id?: string
         }
         Relationships: []

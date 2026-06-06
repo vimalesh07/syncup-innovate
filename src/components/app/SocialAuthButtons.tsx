@@ -115,8 +115,13 @@ export function SocialAuthButtons({ mode = "login" }: { mode?: "login" | "signup
 
   return (
     <div>
-      <div className="flex min-h-[44px] w-full justify-center overflow-hidden rounded-md bg-white">
+      <div className="relative flex min-h-[44px] w-full justify-center overflow-hidden rounded-md bg-white">
         <div ref={googleButtonRef} className={loading ? "pointer-events-none opacity-60" : ""} />
+        {loading ? (
+          <div className="absolute inset-0 grid place-items-center bg-white/80">
+            <Loader2 className="h-4 w-4 animate-spin text-slate-700" />
+          </div>
+        ) : null}
       </div>
     </div>
   );

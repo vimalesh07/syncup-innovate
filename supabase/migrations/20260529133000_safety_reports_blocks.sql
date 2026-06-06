@@ -32,26 +32,32 @@ grant select, insert, delete on public.user_blocks to authenticated;
 grant all on public.post_reports to service_role;
 grant all on public.user_blocks to service_role;
 
+drop policy if exists "Users create own reports" on public.post_reports;
 create policy "Users create own reports" on public.post_reports
   for insert to authenticated
   with check (auth.uid() = reporter_id);
 
+drop policy if exists "Users read own reports" on public.post_reports;
 create policy "Users read own reports" on public.post_reports
   for select to authenticated
   using (auth.uid() = reporter_id or public.has_role(auth.uid(), 'admin'));
 
+drop policy if exists "Admins update reports" on public.post_reports;
 create policy "Admins update reports" on public.post_reports
   for update to authenticated
   using (public.has_role(auth.uid(), 'admin'));
 
+drop policy if exists "Users read own blocks" on public.user_blocks;
 create policy "Users read own blocks" on public.user_blocks
   for select to authenticated
   using (auth.uid() = blocker_id);
 
+drop policy if exists "Users block profiles" on public.user_blocks;
 create policy "Users block profiles" on public.user_blocks
   for insert to authenticated
   with check (auth.uid() = blocker_id);
 
+drop policy if exists "Users unblock profiles" on public.user_blocks;
 create policy "Users unblock profiles" on public.user_blocks
   for delete to authenticated
   using (auth.uid() = blocker_id);

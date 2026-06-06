@@ -1,13 +1,15 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Github, Globe, Linkedin, MessageSquare, Send, ShieldCheck, Trophy, UserPlus, UserCheck, Users, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
+import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { supabase } from "@/integrations/supabase/client";
-import { Profile, initials, profileCompletion } from "@/lib/auth";
+import { Profile, profileCompletion } from "@/lib/auth";
 import { useAuth } from "@/hooks/use-auth";
+import { directMessageNotification, insertNotification } from "@/lib/notifications";
 
 type TeamSummary = {
   id: string;
@@ -18,6 +20,15 @@ type TeamSummary = {
 };
 
 type SocialListMode = "teams" | "followers" | "following";
+
+type DirectMessageRow = {
+  id: string;
+  sender_id: string;
+  recipient_id?: string | null;
+  message: string;
+  created_at: string;
+  delivery_status?: "sending" | "failed";
+};
 
 export const Route = createFileRoute("/profiles/$id")({
   head: () => ({ meta: [{ title: "Profile | SyncUp" }] }),
@@ -36,7 +47,7 @@ function ProfileDetailRoute() {
 
 function ProfileDetail() {
   const { id } = Route.useParams();
-  const { user } = useAuth();
+  const { profile: currentProfile, user } = useAuth();
   const navigate = useNavigate();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [stats, setStats] = useState({ teams: 0, requests: 0, followers: 0, following: 0 });
@@ -49,7 +60,8 @@ function ProfileDetail() {
   const [posts, setPosts] = useState<Array<{ id: string; content: string; created_at: string }>>([]);
   const [messageOpen, setMessageOpen] = useState(false);
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<Array<{ id: string; sender_id: string; message: string; created_at: string }>>([]);
+  const [messages, setMessages] = useState<DirectMessageRow[]>([]);
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (user?.id === id) {
@@ -59,7 +71,12 @@ function ProfileDetail() {
 
   useEffect(() => {
     if (user?.id === id) return;
-    supabase.from("profiles").select("*").eq("id", id).maybeSingle().then(({ data }) => setProfile((data as Profile) ?? null));
+    supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle()
+      .then(({ data }) => setProfile(data ? normalizeProfileForDisplay(data as Profile) : null));
     Promise.all([
       supabase.from("team_members").select("team_id").eq("user_id", id),
       supabase.from("join_requests").select("*", { count: "exact", head: true }).eq("user_id", id),
@@ -81,8 +98,8 @@ function ProfileDetail() {
       ]);
 
       setTeams((teamRows.data as TeamSummary[]) ?? []);
-      setFollowers((followerProfiles.data as Profile[]) ?? []);
-      setFollowingProfiles((followingProfileRows.data as Profile[]) ?? []);
+      setFollowers(((followerProfiles.data as Profile[]) ?? []).filter((item) => item?.id).map(normalizeProfileForDisplay));
+      setFollowingProfiles(((followingProfileRows.data as Profile[]) ?? []).filter((item) => item?.id).map(normalizeProfileForDisplay));
       setStats({
         teams: teamIds.length,
         requests: requests.count ?? 0,
@@ -94,6 +111,29 @@ function ProfileDetail() {
     });
   }, [id, user?.id]);
 
+  useEffect(() => {
+    if (!messageOpen || !user) return;
+    const channel = supabase
+      .channel(`profile-direct-${user.id}-${id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "direct_messages" }, (payload) => {
+        const row = payload.new as DirectMessageRow;
+        const sameThread =
+          (row.sender_id === user.id && row.recipient_id === id) ||
+          (row.sender_id === id && row.recipient_id === user.id);
+        if (!sameThread) return;
+        setMessages((current) => mergeDirectMessages(current, row));
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [messageOpen, id, user?.id]);
+
+  useEffect(() => {
+    const el = messageScrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [messages.length]);
+
   if (user?.id === id) return null;
 
   if (!profile) {
@@ -104,7 +144,9 @@ function ProfileDetail() {
     );
   }
 
-  const completion = profileCompletion(profile);
+  const safeProfile = normalizeProfileForDisplay(profile);
+  const profileSkills = safeProfile.skills ?? [];
+  const completion = profileCompletion(safeProfile);
 
   const toggleFollow = async () => {
     if (!user || user.id === id) return;
@@ -161,7 +203,16 @@ function ProfileDetail() {
     event.preventDefault();
     if (!user || !message.trim()) return;
     const text = message.trim();
+    const tempMessage: DirectMessageRow = {
+      id: `temp-${Date.now()}`,
+      sender_id: user.id,
+      recipient_id: id,
+      message: text,
+      created_at: new Date().toISOString(),
+      delivery_status: "sending",
+    };
     setMessage("");
+    setMessages((current) => mergeDirectMessages(current, tempMessage));
     const { data, error } = await (supabase as any)
       .from("direct_messages")
       .insert({ sender_id: user.id, recipient_id: id, message: text })
@@ -169,15 +220,19 @@ function ProfileDetail() {
       .single();
     if (error) {
       toast.error(error.message);
-      setMessage(text);
+      setMessages((current) => current.map((item) => item.id === tempMessage.id ? { ...item, delivery_status: "failed" } : item));
       return;
     }
-    setMessages((current) => [...current, data]);
-    await supabase.from("notifications").insert({
-      user_id: id,
-      title: "New profile message",
-      message: `${user.email} sent you a message.`,
-    });
+    setMessages((current) => mergeDirectMessages(current.filter((item) => item.id !== tempMessage.id), data));
+    await insertNotification(directMessageNotification({
+      userId: id,
+      senderId: user.id,
+      receiverId: id,
+      senderName: currentProfile?.full_name || currentProfile?.username || user.email || "SyncUp user",
+      senderAvatar: currentProfile?.avatar_url ?? null,
+      conversationId: `direct-${user.id}`,
+      messagePreview: text,
+    }));
   };
 
   return (
@@ -189,16 +244,12 @@ function ProfileDetail() {
           className="mx-auto grid h-28 w-28 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-blue-500 to-purple-500 text-3xl font-bold ring-2 ring-cyan-300/40 transition hover:scale-105"
           title="Open profile"
         >
-          {profile.avatar_url ? (
-            <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
-          ) : (
-            initials(profile)
-          )}
+          <SafeAvatar profile={safeProfile} className="h-full w-full text-4xl ring-0" />
         </Link>
-        <h1 className="mt-5 text-3xl font-bold">{profile.full_name || profile.username || "SyncUp user"}</h1>
+        <h1 className="mt-5 text-3xl font-bold">{safeProfile.full_name || safeProfile.username || "SyncUp user"}</h1>
         <p className="text-cyan-200">@{profile.username || "profile"} · {profile.role || "Builder"}</p>
-        <p className="mt-4 text-sm text-white/60">{profile.bio || "This builder has not added a bio yet."}</p>
-        <p className="mt-3 text-sm text-white/45">{profile.college || "College not added"}</p>
+        <p className="mt-4 text-sm text-white/60">{safeProfile.bio || "This builder has not added a bio yet."}</p>
+        <p className="mt-3 text-sm text-white/45">{safeProfile.college || "College not added"}</p>
 
         {user?.id !== id && (
           <div className="mt-5 flex flex-wrap justify-center gap-3">
@@ -241,22 +292,22 @@ function ProfileDetail() {
         <div className="mt-5">
           <p className="text-sm text-white/50">Skills</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            {(profile.skills ?? []).length ? (profile.skills ?? []).map((skill) => (
+            {profileSkills.length ? profileSkills.map((skill) => (
               <span key={skill} className="rounded-full bg-cyan-300/15 px-3 py-1.5 text-xs text-cyan-100">{skill}</span>
             )) : <span className="text-sm text-white/45">No skills added.</span>}
           </div>
         </div>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <Social href={profile.github_url} icon={Github} label="GitHub" />
-          <Social href={profile.linkedin_url} icon={Linkedin} label="LinkedIn" />
-          <Social href={profile.portfolio_url} icon={Globe} label="Portfolio" />
+          <Social href={safeProfile.github_url} icon={Github} label="GitHub" />
+          <Social href={safeProfile.linkedin_url} icon={Linkedin} label="LinkedIn" />
+          <Social href={safeProfile.portfolio_url} icon={Globe} label="Portfolio" />
         </div>
 
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
           <h3 className="font-semibold">Collaboration signal</h3>
           <p className="mt-2 text-sm text-white/55">
-            {profile.full_name || profile.username || "This user"} has sent {stats.requests} join request{stats.requests === 1 ? "" : "s"} and is connected to {stats.teams} team{stats.teams === 1 ? "" : "s"}.
+            {safeProfile.full_name || safeProfile.username || "This user"} has sent {stats.requests} join request{stats.requests === 1 ? "" : "s"} and is connected to {stats.teams} team{stats.teams === 1 ? "" : "s"}.
           </p>
         </div>
 
@@ -288,10 +339,10 @@ function ProfileDetail() {
                   className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-400 to-purple-500 font-bold ring-1 ring-white/10 transition hover:scale-105"
                   title="Open profile"
                 >
-                  {profile.avatar_url ? <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(profile)}
+                  <SafeAvatar profile={safeProfile} className="h-full w-full text-sm ring-0" />
                 </Link>
                 <div className="min-w-0">
-                  <h2 className="truncate text-2xl font-bold">Message {profile.full_name || profile.username || "user"}</h2>
+                  <h2 className="truncate text-2xl font-bold">Message {safeProfile.full_name || safeProfile.username || "user"}</h2>
                   <p className="mt-1 text-sm text-white/55">Direct profile messages</p>
                 </div>
               </div>
@@ -299,14 +350,16 @@ function ProfileDetail() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="mt-5 min-h-64 flex-1 space-y-3 overflow-y-auto rounded-2xl bg-black/20 p-4">
+            <div ref={messageScrollRef} className="mt-5 min-h-64 flex-1 space-y-3 overflow-y-auto rounded-2xl bg-black/20 p-4">
               {messages.length ? messages.map((item) => {
                 const own = item.sender_id === user?.id;
                 return (
                   <div key={item.id} className={`flex ${own ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${own ? "bg-cyan-300/20 text-cyan-50" : "bg-white/8 text-white/75"}`}>
                       <p>{item.message}</p>
-                      <p className="mt-1 text-[10px] text-white/35">{new Date(item.created_at).toLocaleString()}</p>
+                      <p className="mt-1 text-[10px] text-white/35">
+                        {item.delivery_status === "sending" ? "Sending..." : item.delivery_status === "failed" ? "Failed to send" : new Date(item.created_at).toLocaleString()}
+                      </p>
                     </div>
                   </div>
                 );
@@ -334,6 +387,53 @@ function ProfileDetail() {
       )}
     </div>
   );
+}
+
+function mergeDirectMessages(messages: DirectMessageRow[], incoming: DirectMessageRow) {
+  const next = messages
+    .filter((message) => message.id !== incoming.id)
+    .filter((message) => !isMatchingDirectTemp(message, incoming));
+  return [...next, incoming].sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+}
+
+function isMatchingDirectTemp(temp: DirectMessageRow, incoming: DirectMessageRow) {
+  if (!temp.id.startsWith("temp-") || incoming.id.startsWith("temp-")) return false;
+  if (temp.sender_id !== incoming.sender_id || temp.message !== incoming.message) return false;
+  if ((temp.recipient_id ?? "") !== (incoming.recipient_id ?? "")) return false;
+  return Math.abs(+new Date(temp.created_at) - +new Date(incoming.created_at)) < 30000;
+}
+
+function normalizeProfileForDisplay(profile: Profile): Profile {
+  return {
+    ...profile,
+    full_name: textOrNull(profile.full_name),
+    username: textOrNull(profile.username),
+    avatar_url: textOrNull(profile.avatar_url),
+    bio: textOrNull(profile.bio),
+    college: textOrNull(profile.college),
+    role: textOrNull(profile.role),
+    github_url: textOrNull(profile.github_url),
+    linkedin_url: textOrNull(profile.linkedin_url),
+    portfolio_url: textOrNull(profile.portfolio_url),
+    skills: normalizeSkills(profile.skills),
+    reliability_score: Number.isFinite(Number(profile.reliability_score)) ? Number(profile.reliability_score) : 100,
+  };
+}
+
+function normalizeSkills(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((skill) => `${skill}`.trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((skill) => skill.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function textOrNull(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
 }
 
 function Social({ href, icon: Icon, label }: { href?: string | null; icon: typeof Github; label: string }) {
@@ -424,13 +524,7 @@ function SocialListModal({
               onClick={onClose}
               className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
             >
-              {person.avatar_url ? (
-                <img src={person.avatar_url} alt="" className="h-12 w-12 rounded-xl object-cover" />
-              ) : (
-                <span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-                  {initials(person)}
-                </span>
-              )}
+              <SafeAvatar profile={person} className="h-12 w-12" />
               <div className="min-w-0">
                 <p className="truncate font-semibold">{person.full_name || person.username || "SyncUp user"}</p>
                 <p className="truncate text-xs text-white/50">@{person.username || "profile"} · {person.role || "Builder"}</p>

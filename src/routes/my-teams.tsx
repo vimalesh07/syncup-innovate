@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
+import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { notifyFollowers } from "@/lib/social";
@@ -429,13 +430,7 @@ function MyTeamsPage() {
               <article key={request.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    {request.profile?.avatar_url ? (
-                      <img src={request.profile.avatar_url} alt="" className="h-11 w-11 rounded-xl object-cover" />
-                    ) : (
-                      <span className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500 font-bold">
-                        {(request.profile?.full_name || request.profile?.username || "U").slice(0, 1).toUpperCase()}
-                      </span>
-                    )}
+                    <SafeAvatar profile={request.profile} className="h-11 w-11" />
                     <Link to="/profiles/$id" params={{ id: request.user_id }} className="rounded-xl p-1 transition hover:bg-white/5">
                       <h3 className="font-semibold">{request.profile?.full_name || request.profile?.username || "SyncUp user"}</h3>
                       <p className="text-sm text-cyan-100/70">wants to join {request.team?.team_name ?? "your team"}</p>
