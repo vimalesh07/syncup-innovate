@@ -27,8 +27,8 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { PointerEvent, ReactNode } from "react";
 import { toast } from "sonner";
 import { PlatformShell } from "@/components/app/PlatformShell";
 import { ProtectedPage } from "@/components/app/ProtectedPage";
@@ -231,6 +231,8 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
   const [followLoading, setFollowLoading] = useState(false);
   const [avatarCrop, setAvatarCrop] = useState<AvatarCropDraft | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarCropStageRef = useRef<HTMLDivElement | null>(null);
+  const avatarDragRef = useRef<{ pointerId: number; startX: number; startY: number; cropX: number; cropY: number } | null>(null);
 
   const DRAFT_KEY = user ? `profile_draft_${user.id}` : "";
 
@@ -310,6 +312,22 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
       if (avatarCrop) URL.revokeObjectURL(avatarCrop.url);
     };
   }, [avatarCrop]);
+
+  useEffect(() => {
+    if (!editOpen && !avatarCrop) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousOverscroll = document.body.style.overscrollBehavior;
+    document.body.classList.toggle("syncup-profile-editor-open", editOpen || Boolean(avatarCrop));
+    document.body.classList.toggle("syncup-avatar-crop-open", Boolean(avatarCrop));
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "contain";
+    return () => {
+      document.body.classList.remove("syncup-profile-editor-open");
+      document.body.classList.remove("syncup-avatar-crop-open");
+      document.body.style.overflow = previousOverflow;
+      document.body.style.overscrollBehavior = previousOverscroll;
+    };
+  }, [editOpen, avatarCrop]);
 
   useEffect(() => {
     if (!user || !formReady || !DRAFT_KEY || form.id !== user.id) return;
@@ -599,11 +617,40 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
   const applyAvatarCrop = async () => {
     if (!avatarCrop) return;
     try {
-      const cropped = await cropImageToSquareFile(avatarCrop);
+      const stageSize = avatarCropStageRef.current?.getBoundingClientRect().width || 420;
+      const cropped = await cropImageToSquareFile(avatarCrop, stageSize);
       await uploadAvatar(cropped);
       cancelAvatarCrop();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not crop this image.");
+    }
+  };
+
+  const beginAvatarDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (!avatarCrop) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    avatarDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      cropX: avatarCrop.x,
+      cropY: avatarCrop.y,
+    };
+  };
+
+  const moveAvatarDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = avatarDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setAvatarCrop((current) => current ? {
+      ...current,
+      x: Math.max(-160, Math.min(160, drag.cropX + event.clientX - drag.startX)),
+      y: Math.max(-160, Math.min(160, drag.cropY + event.clientY - drag.startY)),
+    } : current);
+  };
+
+  const endAvatarDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (avatarDragRef.current?.pointerId === event.pointerId) {
+      avatarDragRef.current = null;
     }
   };
 
@@ -891,27 +938,28 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
       </aside>
 
       {editOpen && isOwnProfile && (
-        <div className="fixed inset-0 z-[92] flex items-end justify-center bg-black/55 px-0 backdrop-blur-sm sm:items-center sm:px-4">
+        <div className="profile-editor-screen z-[140]" role="dialog" aria-modal="true" aria-label="Edit profile">
           <motion.div
-            initial={{ opacity: 0, y: 24, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            className="max-h-[92vh] w-full overflow-hidden rounded-t-3xl bg-white shadow-2xl dark:bg-slate-900 sm:max-w-3xl sm:rounded-2xl"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="profile-editor-card"
           >
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
-              <div>
+            <div className="profile-modal-header">
+              <span className="hidden w-10 sm:block" aria-hidden="true" />
+              <div className="min-w-0 flex-1 text-center">
                 <h2 className="text-lg font-bold text-slate-950 dark:text-slate-50">Edit profile</h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400">Update your SyncUp builder identity.</p>
+                <p className="truncate text-sm text-slate-500 dark:text-slate-400">Update your SyncUp builder identity.</p>
               </div>
-              <button type="button" onClick={() => setEditOpen(false)} className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">
+              <button type="button" onClick={() => setEditOpen(false)} className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800" aria-label="Close edit profile">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="max-h-[calc(92vh-76px)] overflow-y-auto p-5">
-              <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+            <div className="profile-modal-body p-4 sm:p-5">
+              <div className="flex min-w-0 items-center gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
                 <SafeAvatar profile={form as Profile} fallback={user?.email} previewable className="h-16 w-16 text-lg" />
-                <div>
-                  <p className="font-bold text-slate-950 dark:text-slate-50">{displayName}</p>
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-slate-950 dark:text-slate-50">{displayName}</p>
                   <label className="mt-2 inline-flex cursor-pointer items-center gap-2 rounded-full border border-cyan-200 bg-white px-3 py-2 text-xs font-semibold text-cyan-700 transition hover:bg-cyan-50 dark:border-cyan-700 dark:bg-slate-900 dark:text-cyan-300 dark:hover:bg-cyan-300/10">
                     <Camera className="h-4 w-4" />
                     Change avatar
@@ -943,7 +991,7 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
                     value={form.bio ?? ""}
                     onChange={(event) => update("bio", event.target.value)}
                     rows={4}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-700 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50 dark:focus:border-cyan-300"
+                    className="mt-1 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-700 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50 dark:focus:border-cyan-300"
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -968,78 +1016,82 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
                 </div>
               </div>
 
-              <div className="mt-6 flex flex-col gap-4 border-t border-slate-200 pt-5 dark:border-slate-700">
-                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setEditOpen(false)}
-                    className="rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const saved = await save();
-                      if (saved) setEditOpen(false);
-                    }}
-                    disabled={saving}
-                    className="flex items-center justify-center gap-2 rounded-full bg-cyan-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:opacity-60 dark:bg-cyan-300 dark:text-slate-950 dark:hover:bg-cyan-200"
-                  >
-                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    Save Profile
-                  </button>
-                </div>
-
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/20">
-                  <p className="font-bold text-red-800 dark:text-red-200">Danger zone</p>
-                  <p className="mt-1 text-sm text-red-700/80 dark:text-red-200/70">Delete your account only if you are sure. This action cannot be undone.</p>
-                  <button
-                    type="button"
-                    onClick={() => setDeleteConfirm(true)}
-                    className="mt-3 flex items-center gap-2 rounded-full border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Delete Account
-                  </button>
-                </div>
+              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/20">
+                <p className="font-bold text-red-800 dark:text-red-200">Danger zone</p>
+                <p className="mt-1 text-sm text-red-700/80 dark:text-red-200/70">Delete your account only if you are sure. This action cannot be undone.</p>
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirm(true)}
+                  className="mt-3 flex items-center gap-2 rounded-full border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Account
+                </button>
               </div>
+            </div>
+
+            <div className="profile-modal-footer">
+              <button
+                type="button"
+                onClick={() => setEditOpen(false)}
+                className="rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const saved = await save();
+                  if (saved) setEditOpen(false);
+                }}
+                disabled={saving}
+                className="flex items-center justify-center gap-2 rounded-full bg-cyan-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:opacity-60 dark:bg-cyan-300 dark:text-slate-950 dark:hover:bg-cyan-200"
+              >
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save Profile
+              </button>
             </div>
           </motion.div>
         </div>
       )}
 
       {avatarCrop && (
-        <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/75 px-0 backdrop-blur-md sm:items-center sm:px-4" role="dialog" aria-modal="true" aria-label="Crop profile photo">
+        <div className="avatar-crop-overlay profile-modal-overlay bg-black/75 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="Crop profile photo">
           <motion.div
             initial={{ opacity: 0, y: 24, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            className="w-full max-w-2xl rounded-t-3xl bg-white shadow-2xl dark:bg-slate-900 sm:rounded-3xl"
+            className="avatar-crop-modal profile-modal-panel"
           >
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <div className="profile-modal-header">
               <div>
                 <h2 className="text-lg font-bold text-slate-950 dark:text-slate-50">Crop profile photo</h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400">Move and zoom the image into the circle.</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Move and zoom the image inside the crop box.</p>
               </div>
               <button type="button" onClick={cancelAvatarCrop} className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800" aria-label="Close crop photo">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="grid max-h-[calc(100svh-90px)] gap-5 overflow-y-auto p-5 md:grid-cols-[minmax(0,1fr)_180px]">
+            <div className="avatar-crop-body profile-modal-body">
               <div className="space-y-4">
-                <div className="relative mx-auto aspect-square w-full max-w-[420px] overflow-hidden rounded-3xl bg-slate-950">
+                <div
+                  ref={avatarCropStageRef}
+                  className="avatar-crop-stage relative mx-auto overflow-hidden rounded-3xl bg-slate-950"
+                  onPointerDown={beginAvatarDrag}
+                  onPointerMove={moveAvatarDrag}
+                  onPointerUp={endAvatarDrag}
+                  onPointerCancel={endAvatarDrag}
+                >
                   <img
                     src={avatarCrop.url}
                     alt="Selected profile photo"
-                    className="h-full w-full select-none object-cover"
+                    className="h-full w-full select-none object-cover will-change-transform"
                     style={{
                       transform: `translate(${avatarCrop.x}px, ${avatarCrop.y}px) scale(${avatarCrop.zoom})`,
                     }}
                     draggable={false}
                   />
-                  <div className="pointer-events-none absolute inset-0 bg-black/35 [clip-path:polygon(0_0,100%_0,100%_100%,0_100%,0_0)]" />
-                  <div className="pointer-events-none absolute inset-[10%] rounded-full border-2 border-white shadow-[0_0_0_999px_rgba(0,0,0,0.42)]" />
+                  <div className="avatar-crop-focus-box" />
                 </div>
 
                 <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
@@ -1059,8 +1111,8 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
                     Horizontal position
                     <input
                       type="range"
-                      min="-120"
-                      max="120"
+                      min="-160"
+                      max="160"
                       step="1"
                       value={avatarCrop.x}
                       onChange={(event) => setAvatarCrop((current) => current ? { ...current, x: Number(event.target.value) } : current)}
@@ -1071,8 +1123,8 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
                     Vertical position
                     <input
                       type="range"
-                      min="-120"
-                      max="120"
+                      min="-160"
+                      max="160"
                       step="1"
                       value={avatarCrop.y}
                       onChange={(event) => setAvatarCrop((current) => current ? { ...current, y: Number(event.target.value) } : current)}
@@ -1083,11 +1135,11 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
               </div>
 
               <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center dark:border-slate-700 dark:bg-slate-800">
-                <div className="grid h-32 w-32 overflow-hidden rounded-full bg-slate-950">
+                <div className="avatar-crop-preview grid overflow-hidden rounded-full bg-slate-950">
                   <img
                     src={avatarCrop.url}
                     alt="Circular crop preview"
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-cover will-change-transform"
                     style={{
                       transform: `translate(${avatarCrop.x / 3}px, ${avatarCrop.y / 3}px) scale(${avatarCrop.zoom})`,
                     }}
@@ -1098,7 +1150,7 @@ export function ProfilePage({ routeUsername }: { routeUsername?: string }) {
               </div>
             </div>
 
-            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 p-5 dark:border-slate-700 sm:flex-row sm:justify-end">
+            <div className="profile-modal-footer">
               <button type="button" onClick={cancelAvatarCrop} className="rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
                 Cancel
               </button>
@@ -1250,7 +1302,7 @@ function InfoTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-async function cropImageToSquareFile(draft: AvatarCropDraft) {
+async function cropImageToSquareFile(draft: AvatarCropDraft, stageSize: number) {
   const image = await loadImage(draft.url);
   const size = 512;
   const canvas = document.createElement("canvas");
@@ -1266,7 +1318,7 @@ async function cropImageToSquareFile(draft: AvatarCropDraft) {
   const scale = baseScale * draft.zoom;
   const width = image.naturalWidth * scale;
   const height = image.naturalHeight * scale;
-  const previewToCanvas = size / 420;
+  const previewToCanvas = size / Math.max(1, stageSize);
   const x = (size - width) / 2 + draft.x * previewToCanvas;
   const y = (size - height) / 2 + draft.y * previewToCanvas;
 
@@ -1658,14 +1710,14 @@ function Field({
   icon?: LucideIcon;
 }) {
   return (
-    <div>
+    <div className="min-w-0">
       <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</label>
       <div className="relative mt-1">
         {Icon && <Icon className="absolute left-3 top-3.5 h-4 w-4 text-slate-400" />}
         <input
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className={`w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-700 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50 dark:focus:border-cyan-300 ${Icon ? "pl-10" : ""}`}
+          className={`w-full min-w-0 truncate rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-700 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50 dark:focus:border-cyan-300 ${Icon ? "pl-10" : ""}`}
         />
       </div>
     </div>

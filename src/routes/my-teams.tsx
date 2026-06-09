@@ -189,6 +189,20 @@ function MyTeamsPage() {
     window.localStorage.setItem("syncup_team_draft", JSON.stringify({ form, skills, customSkill, open }));
   }, [customSkill, form, open, skills]);
 
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousOverscroll = document.body.style.overscrollBehavior;
+    document.body.classList.add("syncup-team-modal-open");
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "contain";
+    return () => {
+      document.body.classList.remove("syncup-team-modal-open");
+      document.body.style.overflow = previousOverflow;
+      document.body.style.overscrollBehavior = previousOverscroll;
+    };
+  }, [open]);
+
   const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const toggleSkill = (skill: string) => setSkills((current) => (current.includes(skill) ? current.filter((item) => item !== skill) : [...current, skill]));
   const addCustomSkill = () => {
@@ -521,32 +535,32 @@ function MyTeamsPage() {
       </div>
 
       {open && (
-        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+        <div className="team-modal-overlay fixed inset-0 grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
           <motion.form
             onSubmit={createTeam}
             initial={{ opacity: 0, y: 18, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            className="neon-border glass-strong max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6"
+            className="team-create-modal"
           >
-            <div className="flex items-start justify-between gap-4">
+            <div className="team-modal-header flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-bold">Create a team</h2>
-                <p className="mt-1 text-sm text-white/55">Define your project, ideal collaborators, and team capacity.</p>
+                <h2 className="text-2xl font-bold text-slate-950 dark:text-slate-50">Create a team</h2>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Define your project, ideal collaborators, and team capacity.</p>
               </div>
-              <button type="button" onClick={() => setOpen(false)} className="rounded-xl p-2 text-white/60 hover:bg-white/10 hover:text-white">
+              <button type="button" onClick={() => setOpen(false)} className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white" aria-label="Close create team">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div className="team-modal-body grid gap-4 md:grid-cols-2">
               <Field label="Team name" value={form.teamName} onChange={(value) => update("teamName", value)} required />
               <Field label="Project title" value={form.projectTitle} onChange={(value) => update("projectTitle", value)} />
               <div>
-                <label className="text-xs text-white/60">Team purpose</label>
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">Team purpose</label>
                 <select
                   value={form.teamPurpose}
                   onChange={(event) => update("teamPurpose", event.target.value)}
-                  className="mt-1 w-full rounded-xl border border-white/10 bg-[#111827] px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+                  className="team-form-control mt-1 w-full rounded-xl px-4 py-3 text-sm outline-none transition"
                 >
                   {purposeOptions.map((purpose) => <option key={purpose}>{purpose}</option>)}
                 </select>
@@ -566,7 +580,7 @@ function MyTeamsPage() {
               />
               <Field label="Max members" type="number" value={form.maxMembers} onChange={(value) => update("maxMembers", value)} required />
               <div className="md:col-span-2">
-                <label className="text-xs text-white/60">Required skills</label>
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">Required skills</label>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {skillOptions.map((skill) => {
                     const selected = skills.includes(skill);
@@ -576,7 +590,7 @@ function MyTeamsPage() {
                         type="button"
                         onClick={() => toggleSkill(skill)}
                         className={`rounded-full border px-3 py-2 text-xs transition ${
-                          selected ? "border-cyan-300 bg-cyan-300/15 text-cyan-100" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10"
+                          selected ? "border-cyan-300 bg-cyan-50 text-cyan-800 dark:bg-cyan-300/15 dark:text-cyan-100" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10"
                         }`}
                       >
                         {skill}
@@ -594,13 +608,13 @@ function MyTeamsPage() {
                         addCustomSkill();
                       }
                     }}
-                    className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+                    className="team-form-control flex-1 rounded-xl px-4 py-3 text-sm outline-none transition"
                     placeholder="Add any new skill, tool, domain, or language"
                   />
                   <button
                     type="button"
                     onClick={addCustomSkill}
-                    className="rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/15"
+                    className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm font-semibold text-cyan-800 transition hover:bg-cyan-100 dark:border-cyan-300/30 dark:bg-cyan-300/10 dark:text-cyan-100 dark:hover:bg-cyan-300/15"
                   >
                     Add skill
                   </button>
@@ -612,35 +626,35 @@ function MyTeamsPage() {
                         type="button"
                         key={skill}
                         onClick={() => toggleSkill(skill)}
-                        className="rounded-full border border-cyan-300/40 bg-cyan-300/15 px-3 py-1.5 text-xs text-cyan-100"
+                        className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs text-cyan-800 dark:border-cyan-300/40 dark:bg-cyan-300/15 dark:text-cyan-100"
                         title="Click to remove"
                       >
-                        {skill} ×
+                        {skill} x
                       </button>
                     ))}
                   </div>
                 )}
               </div>
               <div className="md:col-span-2">
-                <label className="text-xs text-white/60">Description</label>
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">Description</label>
                 <textarea
                   value={form.description}
                   onChange={(event) => update("description", event.target.value)}
                   rows={4}
-                  className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+                  className="team-form-control mt-1 w-full resize-y rounded-xl px-4 py-3 text-sm outline-none transition"
                   placeholder="What are you building and who do you need?"
                 />
               </div>
             </div>
 
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setOpen(false)} className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-white/75 hover:bg-white/10">
+            <div className="team-modal-footer flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setOpen(false)} className="rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold disabled:opacity-60"
+                className="flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:brightness-105 disabled:opacity-60"
               >
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 Save team
@@ -718,18 +732,18 @@ function PurposeGuide({ purpose }: { purpose: string }) {
   return (
     <div className={`md:col-span-2 rounded-2xl border p-4 ${
       isPatent
-        ? "border-amber-300/30 bg-amber-300/10"
+        ? "border-amber-200 bg-amber-50 dark:border-amber-300/30 dark:bg-amber-300/10"
         : isHackathon
-          ? "border-cyan-300/30 bg-cyan-300/10"
-          : "border-white/10 bg-white/5"
+          ? "border-cyan-200 bg-cyan-50 dark:border-cyan-300/30 dark:bg-cyan-300/10"
+          : "border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/5"
     }`}>
       <div className="flex items-start gap-3">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-purple-500">
           <Icon className="h-5 w-5" />
         </span>
         <div>
-          <p className="font-semibold">{title}</p>
-          <p className="mt-1 text-sm text-white/60">{copy}</p>
+          <p className="font-semibold text-slate-950 dark:text-white">{title}</p>
+          <p className="mt-1 text-sm text-slate-600 dark:text-white/60">{copy}</p>
         </div>
       </div>
     </div>
@@ -752,8 +766,8 @@ function Field({
   placeholder?: string;
 }) {
   return (
-    <div>
-      <label className="text-xs text-white/60">{label}</label>
+    <div className="min-w-0">
+      <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</label>
       <input
         type={type}
         value={value}
@@ -762,7 +776,7 @@ function Field({
         max={type === "number" ? 12 : undefined}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none transition focus:border-cyan-300"
+        className="team-form-control mt-1 w-full min-w-0 rounded-xl px-4 py-3 text-sm outline-none transition"
       />
     </div>
   );

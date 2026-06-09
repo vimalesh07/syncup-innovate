@@ -106,6 +106,8 @@ function HomeFeed() {
   const [likesLoading, setLikesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
+  const [likePending, setLikePending] = useState<Record<string, boolean>>({});
+  const [commentPending, setCommentPending] = useState<Record<string, boolean>>({});
 
   const loadHome = async () => {
     if (!user) return;
@@ -244,26 +246,105 @@ function HomeFeed() {
 
   const toggleLike = async (post: Post) => {
     if (!user) return;
-    if (post.liked) {
-      await (supabase as any).from("post_likes").delete().eq("post_id", post.id).eq("user_id", user.id);
-    } else {
-      await (supabase as any).from("post_likes").insert({ post_id: post.id, user_id: user.id });
+    if (likePending[post.id]) return;
+
+    const previousPost = post;
+    const nextLiked = !post.liked;
+    setLikePending((current) => ({ ...current, [post.id]: true }));
+    setPosts((current) =>
+      current.map((item) =>
+        item.id === post.id
+          ? { ...item, liked: nextLiked, likes: Math.max(0, item.likes + (nextLiked ? 1 : -1)) }
+          : item,
+      ),
+    );
+    if (likesPost?.id === post.id) {
+      setLikesPost((current) =>
+        current ? { ...current, liked: nextLiked, likes: Math.max(0, current.likes + (nextLiked ? 1 : -1)) } : current,
+      );
     }
-    await loadHome();
+
+    const result = post.liked
+      ? await (supabase as any).from("post_likes").delete().eq("post_id", post.id).eq("user_id", user.id)
+      : await (supabase as any).from("post_likes").insert({ post_id: post.id, user_id: user.id });
+
+    setLikePending((current) => {
+      const next = { ...current };
+      delete next[post.id];
+      return next;
+    });
+
+    if (result.error) {
+      setPosts((current) => current.map((item) => (item.id === post.id ? previousPost : item)));
+      if (likesPost?.id === post.id) setLikesPost(previousPost);
+      toast.error(result.error.message || "Could not update like.");
+    }
   };
 
   const addComment = async (event: React.FormEvent, post: Post) => {
     event.preventDefault();
     if (!user || !commentText[post.id]?.trim()) return;
+    if (commentPending[post.id]) return;
     const content = commentText[post.id].trim();
+    const tempId = `temp-${post.id}-${Date.now()}`;
+    const optimisticComment: Comment = {
+      id: tempId,
+      post_id: post.id,
+      user_id: user.id,
+      content,
+      created_at: new Date().toISOString(),
+      profile: profile ?? null,
+    };
+
+    setCommentPending((current) => ({ ...current, [post.id]: true }));
     setCommentText((current) => ({ ...current, [post.id]: "" }));
-    const { error } = await (supabase as any).from("post_comments").insert({ post_id: post.id, user_id: user.id, content });
+    setPosts((current) =>
+      current.map((item) =>
+        item.id === post.id
+          ? { ...item, comments: [...item.comments, optimisticComment] }
+          : item,
+      ),
+    );
+
+    const { data, error } = await (supabase as any)
+      .from("post_comments")
+      .insert({ post_id: post.id, user_id: user.id, content })
+      .select("*")
+      .single();
+
+    setCommentPending((current) => {
+      const next = { ...current };
+      delete next[post.id];
+      return next;
+    });
+
     if (error) {
       toast.error(error.message);
-      setCommentText((current) => ({ ...current, [post.id]: content }));
+      setPosts((current) =>
+        current.map((item) =>
+          item.id === post.id
+            ? { ...item, comments: item.comments.filter((comment) => comment.id !== tempId) }
+            : item,
+        ),
+      );
       return;
     }
-    await loadHome();
+
+    const savedComment = data as Comment | null;
+    if (savedComment) {
+      setPosts((current) =>
+        current.map((item) =>
+          item.id === post.id
+            ? {
+                ...item,
+                comments: item.comments.map((comment) =>
+                  comment.id === tempId ? { ...savedComment, profile: profile ?? null } : comment,
+                ),
+              }
+            : item,
+        ),
+      );
+    }
   };
 
   const sharePost = async (post: Post) => {
@@ -595,6 +676,8 @@ function HomeFeed() {
             onReport={() => openReport(post)}
             onBlock={() => blockUser(post)}
             currentUserId={user?.id}
+            likePending={Boolean(likePending[post.id])}
+            commentPending={Boolean(commentPending[post.id])}
           />
         )) : (
           <div className="syncup-card border-dashed p-10 text-center text-sm text-slate-500 dark:text-slate-400">
@@ -607,7 +690,7 @@ function HomeFeed() {
             {teams.length ? teams.slice(0, 4).map((team) => (
               <Link key={team.id} to="/teams/$id" params={{ id: team.id }} className="block min-w-0 rounded-xl border border-slate-100 p-3 transition hover:border-cyan-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-cyan-700 dark:hover:bg-slate-800">
                 <p className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{team.team_name}</p>
-                <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{team.team_purpose || "Team"} Â· {team.project_title || "Project pending"}</p>
+                <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{team.team_purpose || "Team"} - {team.project_title || "Project pending"}</p>
               </Link>
             )) : (
               <Link to="/my-teams" className="block rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500 transition hover:border-cyan-200 hover:text-cyan-700 dark:border-slate-700 dark:text-slate-400 dark:hover:border-cyan-700 dark:hover:text-cyan-300">
@@ -853,6 +936,8 @@ function PostCard({
   onReport,
   onBlock,
   currentUserId,
+  likePending = false,
+  commentPending = false,
 }: {
   post: Post;
   commentText: string;
@@ -865,6 +950,8 @@ function PostCard({
   onReport: () => void;
   onBlock: () => void;
   currentUserId?: string;
+  likePending?: boolean;
+  commentPending?: boolean;
 }) {
   const { profile: viewerProfile, user: viewerUser } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -960,7 +1047,7 @@ function PostCard({
       <PostText content={post.content} />
       <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-100 pt-2 dark:border-slate-700 sm:grid-cols-4">
         <div className={`flex min-w-0 items-center justify-center gap-1 rounded-full px-2 py-2 text-sm font-semibold transition hover:bg-slate-100 dark:hover:bg-slate-800 ${post.liked ? "text-red-600 dark:text-red-300" : "text-slate-600 dark:text-slate-400"}`}>
-          <button onClick={onLike} className="flex min-w-0 items-center gap-2 transition hover:text-red-600 dark:hover:text-red-300">
+          <button type="button" onClick={onLike} disabled={likePending} className="flex min-w-0 items-center gap-2 transition hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:text-red-300">
             <Heart className={`h-4 w-4 ${post.liked ? "fill-current" : ""}`} />
             <span>Like</span>
           </button>
@@ -975,11 +1062,11 @@ function PostCard({
             </button>
           )}
         </div>
-        <button onClick={toggleComments} className="flex min-w-0 items-center justify-center gap-2 rounded-full px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+        <button type="button" onClick={toggleComments} className="flex min-w-0 items-center justify-center gap-2 rounded-full px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
           <MessageCircle className="h-4 w-4" />
           <span className="truncate">Comment {post.comments.length ? post.comments.length : ""}</span>
         </button>
-        <button onClick={onShare} className="flex min-w-0 items-center justify-center gap-2 rounded-full px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+        <button type="button" onClick={onShare} className="flex min-w-0 items-center justify-center gap-2 rounded-full px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
           <Share2 className="h-4 w-4" />
           <span className="truncate">Share {post.shares ? post.shares : ""}</span>
         </button>
@@ -1051,9 +1138,9 @@ function PostCard({
               />
               <button
                 type="submit"
-                disabled={!commentText.trim()}
+                disabled={!commentText.trim() || commentPending}
                 className={`grid h-8 w-8 shrink-0 place-items-center rounded-full transition ${
-                  commentText.trim()
+                  commentText.trim() && !commentPending
                     ? "bg-cyan-300 text-[#0B0F19] hover:bg-cyan-200"
                     : theme === "light"
                       ? "text-slate-400"

@@ -246,6 +246,8 @@ html[data-theme="dark"] .syncup-card,
 
 .profile-page {
   color: #111827;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 .profile-card {
@@ -254,6 +256,12 @@ html[data-theme="dark"] .syncup-card,
   background: #ffffff;
   color: #111827;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+body.syncup-profile-editor-open .syncup-app > header,
+body.syncup-avatar-crop-open .syncup-app > header,
+body.syncup-team-modal-open .syncup-app > header {
+  display: none !important;
 }
 
 .profile-secondary-button {
@@ -288,6 +296,290 @@ html[data-theme="dark"] .syncup-card,
 
 .profile-primary-button:hover {
   background: #1e293b !important;
+}
+
+.profile-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.58);
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.avatar-crop-overlay {
+  z-index: 11000;
+}
+
+.profile-modal-panel {
+  display: flex;
+  max-height: 90vh;
+  max-height: 90svh;
+  min-height: 0;
+  width: min(900px, 95vw);
+  max-width: 95vw;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 24px;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.34);
+  box-sizing: border-box;
+}
+
+.profile-edit-modal {
+  width: min(820px, 95vw);
+}
+
+.profile-editor-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  box-sizing: border-box;
+  min-height: 100vh;
+  min-height: 100svh;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  background: #f8fafc;
+  padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
+}
+
+.profile-editor-card {
+  display: flex;
+  min-height: 0;
+  max-height: calc(100vh - 48px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  max-height: calc(100svh - 48px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  width: min(1000px, 100%);
+  max-width: 1000px;
+  margin: 0 auto;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 24px;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.16);
+  box-sizing: border-box;
+}
+
+.avatar-crop-modal {
+  width: min(920px, 95vw);
+}
+
+.profile-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 1rem 1.25rem;
+}
+
+.profile-modal-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.profile-modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  border-top: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 1rem 1.25rem;
+  box-shadow: 0 -12px 24px rgba(15, 23, 42, 0.04);
+}
+
+.avatar-crop-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 210px);
+  gap: 1.25rem;
+  padding: 1.25rem;
+}
+
+.avatar-crop-stage {
+  aspect-ratio: 1 / 1;
+  width: clamp(240px, min(100%, calc(90svh - 280px)), 420px);
+  min-width: 240px;
+  max-width: 420px;
+  min-height: 240px;
+  max-height: 420px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.avatar-crop-stage:active {
+  cursor: grabbing;
+}
+
+.avatar-crop-focus-box {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 24px;
+  box-shadow: inset 0 0 0 9999px rgba(2, 6, 23, 0.08);
+  background-image:
+    linear-gradient(to right, transparent calc(33.333% - 0.5px), rgba(255, 255, 255, 0.55) calc(33.333% - 0.5px), rgba(255, 255, 255, 0.55) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px)),
+    linear-gradient(to right, transparent calc(66.666% - 0.5px), rgba(255, 255, 255, 0.55) calc(66.666% - 0.5px), rgba(255, 255, 255, 0.55) calc(66.666% + 0.5px), transparent calc(66.666% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.333% - 0.5px), rgba(255, 255, 255, 0.55) calc(33.333% - 0.5px), rgba(255, 255, 255, 0.55) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(66.666% - 0.5px), rgba(255, 255, 255, 0.55) calc(66.666% - 0.5px), rgba(255, 255, 255, 0.55) calc(66.666% + 0.5px), transparent calc(66.666% + 0.5px));
+}
+
+.avatar-crop-preview {
+  aspect-ratio: 1 / 1;
+  width: min(8rem, 38vw);
+}
+
+.profile-modal-panel input,
+.profile-modal-panel textarea,
+.profile-modal-panel button,
+.profile-editor-card input,
+.profile-editor-card textarea,
+.profile-editor-card button {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.team-modal-overlay {
+  z-index: 10000;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+}
+
+.team-create-modal {
+  display: flex;
+  max-height: calc(100vh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  max-height: calc(100svh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  min-height: 0;
+  width: min(920px, 100%);
+  max-width: 920px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 24px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.34);
+  box-sizing: border-box;
+}
+
+.team-modal-header {
+  flex: 0 0 auto;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 1.5rem 1.5rem 1rem;
+}
+
+.team-modal-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #ffffff;
+  padding: 1.5rem;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.team-modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  border-top: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 1rem 1.5rem;
+  box-shadow: 0 -12px 24px rgba(15, 23, 42, 0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.team-form-control {
+  border: 1px solid #d1d5db;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.team-form-control::placeholder {
+  color: #9ca3af;
+}
+
+.team-form-control:focus {
+  border-color: #0891b2;
+  background: #ffffff;
+}
+
+.team-create-modal input,
+.team-create-modal select,
+.team-create-modal textarea,
+.team-create-modal button {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+html[data-theme="dark"] .team-create-modal,
+.syncup-app.theme-dark .team-create-modal {
+  border-color: #334155;
+  background: #111827;
+  color: #f8fafc;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+}
+
+html[data-theme="dark"] .team-modal-header,
+html[data-theme="dark"] .team-modal-footer,
+.syncup-app.theme-dark .team-modal-header,
+.syncup-app.theme-dark .team-modal-footer {
+  border-color: #334155;
+}
+
+html[data-theme="dark"] .team-modal-body,
+.syncup-app.theme-dark .team-modal-body {
+  background: #111827;
+}
+
+html[data-theme="dark"] .team-modal-footer,
+.syncup-app.theme-dark .team-modal-footer {
+  background: rgba(17, 24, 39, 0.96);
+}
+
+html[data-theme="dark"] .team-form-control,
+.syncup-app.theme-dark .team-form-control {
+  border-color: #334155;
+  background: #1f2937;
+  color: #f8fafc;
+}
+
+html[data-theme="dark"] .team-form-control:focus,
+.syncup-app.theme-dark .team-form-control:focus {
+  border-color: #67e8f9;
+  background: #111827;
 }
 
 html[data-theme="dark"] .profile-page,
@@ -326,6 +618,104 @@ html[data-theme="dark"] .profile-primary-button,
 html[data-theme="dark"] .profile-primary-button:hover,
 .syncup-app.theme-dark .profile-primary-button:hover {
   background: #ffffff !important;
+}
+
+html[data-theme="dark"] .profile-modal-panel,
+.syncup-app.theme-dark .profile-modal-panel {
+  border-color: #334155;
+  background: #111827;
+  color: #f8fafc;
+}
+
+html[data-theme="dark"] .profile-editor-screen,
+.syncup-app.theme-dark .profile-editor-screen {
+  background: #020617;
+}
+
+html[data-theme="dark"] .profile-editor-card,
+.syncup-app.theme-dark .profile-editor-card {
+  border-color: #334155;
+  background: #111827;
+  color: #f8fafc;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+}
+
+html[data-theme="dark"] .profile-modal-header,
+html[data-theme="dark"] .profile-modal-footer,
+.syncup-app.theme-dark .profile-modal-header,
+.syncup-app.theme-dark .profile-modal-footer {
+  border-color: #334155;
+}
+
+html[data-theme="dark"] .profile-modal-footer,
+.syncup-app.theme-dark .profile-modal-footer {
+  background: rgba(17, 24, 39, 0.96);
+}
+
+@media (max-width: 767px) {
+  .profile-modal-overlay {
+    align-items: flex-end;
+    padding: 0.5rem;
+  }
+
+  .avatar-crop-overlay {
+    align-items: center;
+  }
+
+  .profile-modal-panel {
+    width: min(100%, 95vw);
+    max-width: 95vw;
+    max-height: 90vh;
+    max-height: 90svh;
+    border-radius: 22px;
+  }
+
+  .profile-editor-screen {
+    padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .profile-editor-card {
+    max-height: calc(100vh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100svh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    border-radius: 22px;
+  }
+
+  .profile-modal-header {
+    padding: 0.9rem 1rem;
+  }
+
+  .profile-modal-footer {
+    flex-direction: column-reverse;
+    padding: 0.9rem 1rem calc(0.9rem + env(safe-area-inset-bottom));
+  }
+
+  .profile-modal-footer > button {
+    width: 100%;
+  }
+
+  .avatar-crop-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .avatar-crop-stage {
+    width: clamp(220px, min(100%, calc(90svh - 440px)), 420px);
+    min-width: 220px;
+    min-height: 220px;
+  }
+}
+
+@media (max-width: 420px), (max-height: 720px) {
+  .avatar-crop-stage {
+    width: clamp(200px, min(100%, calc(90svh - 380px)), 340px);
+    min-width: 200px;
+    min-height: 200px;
+  }
+
+  .avatar-crop-preview {
+    width: 6.5rem;
+  }
 }
 
 html[data-theme="dark"] .syncup-shortcut,
