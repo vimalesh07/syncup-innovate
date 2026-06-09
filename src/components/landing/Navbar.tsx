@@ -8,14 +8,6 @@ import { SafeAvatar } from "@/components/app/SafeAvatar";
 import { useAuth } from "@/hooks/use-auth";
 import { supabase } from "@/integrations/supabase/client";
 
-const links = [
-  { label: "Home", href: "#home" },
-  { label: "Competitions", href: "#features" },
-  { label: "Teams", href: "#demo" },
-  { label: "Community", href: "#community" },
-  { label: "About", href: "#how" },
-];
-
 export function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
@@ -67,16 +59,6 @@ export function Navbar() {
           </Link>
 
           <nav className="hidden md:flex items-center gap-8">
-            {links.map((l) => (
-              <a
-                key={l.label}
-                href={l.href}
-                className="text-sm text-white/70 hover:text-white transition-colors relative group"
-              >
-                {l.label}
-                <span className="absolute -bottom-1 left-0 h-px w-0 bg-gradient-to-r from-blue-400 to-purple-400 group-hover:w-full transition-all duration-300" />
-              </a>
-            ))}
             {user && (
               <Link to="/dashboard" className="text-sm text-white/70 hover:text-white transition-colors relative group">
                 Dashboard
@@ -153,16 +135,6 @@ export function Navbar() {
             animate={{ opacity: 1, y: 0 }}
             className="md:hidden mt-2 glass-strong rounded-2xl p-4 flex flex-col gap-2"
           >
-            {links.map((l) => (
-              <a
-                key={l.label}
-                href={l.href}
-                onClick={() => setOpen(false)}
-                className="text-sm text-white/80 hover:text-white px-3 py-2 rounded-lg hover:bg-white/5"
-              >
-                {l.label}
-              </a>
-            ))}
             {user ? (
               <>
                 <Link to="/dashboard" className="text-sm text-white/80 hover:text-white px-3 py-2 rounded-lg hover:bg-white/5">Dashboard</Link>

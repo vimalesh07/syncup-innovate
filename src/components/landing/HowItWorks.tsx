@@ -4,8 +4,8 @@ import { UserPlus, Search, Handshake, Rocket } from "lucide-react";
 const steps = [
   { icon: UserPlus, title: "Create Your Profile", desc: "Add your skills, portfolio, GitHub, and what you want to build." },
   { icon: Search, title: "Discover Competitions", desc: "Browse hackathons, SIH, startup contests, and symposiums in one feed." },
-  { icon: Handshake, title: "Match With Teams", desc: "Use AI matching to find teammates whose skills complement yours." },
-  { icon: Rocket, title: "Build & Innovate", desc: "Collaborate in real-time chat, task boards, and shared workspaces." },
+  { icon: Handshake, title: "Request to Join Teams", desc: "Use profiles, skills, and project context to decide where you fit." },
+  { icon: Rocket, title: "Build Together", desc: "Keep team requests, messages, and project collaboration in one place." },
 ];
 
 export function HowItWorks() {

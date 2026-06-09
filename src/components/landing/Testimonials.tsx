@@ -1,30 +1,30 @@
 import { motion } from "framer-motion";
-import { Quote } from "lucide-react";
+import { MessageSquare, Search, ShieldCheck, Trophy } from "lucide-react";
 
-const testimonials = [
+const solutions = [
   {
-    quote: "I built my SIH-winning team in 2 days. The skill matching is shockingly accurate.",
-    name: "Aditi Verma",
-    role: "UI Designer · VIT",
-    color: "from-pink-500 to-purple-500",
-  },
-  {
-    quote: "Finally a place where ML engineers and designers actually find each other.",
-    name: "Vikram Singh",
-    role: "ML Engineer · IIIT Hyderabad",
+    icon: Search,
+    title: "Find teammates by skills",
+    copy: "Move beyond scattered messages by searching for builders with the roles, tools, and interests your team needs.",
     color: "from-cyan-400 to-blue-500",
   },
   {
-    quote: "The reliability score changed how I think about teammates. No more ghosters.",
-    name: "Sneha Patil",
-    role: "Research Student · IIT Delhi",
+    icon: ShieldCheck,
+    title: "Build trust before you invite",
+    copy: "Use clear profiles, project history, portfolios, and role expectations to make better team decisions.",
     color: "from-emerald-400 to-cyan-500",
   },
   {
-    quote: "We pitched, won, and incorporated — all through people we met on SyncUp.",
-    name: "Arjun Kapoor",
-    role: "Startup Founder · BITS Pilani",
+    icon: Trophy,
+    title: "Prepare for competitions faster",
+    copy: "Bring competition discovery, teammate search, and team requests into one focused workflow.",
     color: "from-amber-400 to-orange-500",
+  },
+  {
+    icon: MessageSquare,
+    title: "Keep requests in one place",
+    copy: "Manage team requests, messages, and collaboration context without losing everything in separate chats.",
+    color: "from-purple-500 to-pink-500",
   },
 ];
 
@@ -34,36 +34,36 @@ export function Testimonials() {
       <div className="absolute inset-0 grid-bg opacity-20" />
       <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6">
         <div className="text-center max-w-2xl mx-auto">
-          <div className="inline-block px-3 py-1 rounded-full glass text-xs text-white/70 mb-4">Testimonials</div>
+          <div className="inline-block px-3 py-1 rounded-full glass text-xs text-white/70 mb-4">Built to solve</div>
           <h2 className="text-4xl sm:text-5xl font-bold tracking-tight">
-            Loved by <span className="text-gradient">innovators</span>
+            What SyncUp is <span className="text-gradient">designed for</span>
           </h2>
+          <p className="mt-4 text-white/60">
+            Honest tools for student builders, without pretending early product signals are live platform data.
+          </p>
         </div>
 
         <div className="mt-16 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          {testimonials.map((t, i) => (
-            <motion.div
-              key={t.name}
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: i * 0.08 }}
-              whileHover={{ y: -6, rotate: -1 }}
-              className="glass rounded-2xl p-6 hover:bg-white/[0.06] transition-all"
-            >
-              <Quote className="h-6 w-6 text-blue-400/60 mb-3" />
-              <p className="text-sm text-white/80 leading-relaxed">"{t.quote}"</p>
-              <div className="mt-5 flex items-center gap-3 pt-4 border-t border-white/5">
-                <div className={`h-10 w-10 rounded-full bg-gradient-to-br ${t.color} flex items-center justify-center text-xs font-bold text-white`}>
-                  {t.name.split(" ").map((n) => n[0]).join("")}
+          {solutions.map((item, i) => {
+            const Icon = item.icon;
+            return (
+              <motion.div
+                key={item.title}
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: i * 0.08 }}
+                whileHover={{ y: -6 }}
+                className="glass rounded-2xl p-6 hover:bg-white/[0.06] transition-all"
+              >
+                <div className={`h-11 w-11 rounded-xl bg-gradient-to-br ${item.color} flex items-center justify-center mb-4`}>
+                  <Icon className="h-5 w-5 text-white" />
                 </div>
-                <div>
-                  <div className="text-sm font-semibold text-white">{t.name}</div>
-                  <div className="text-xs text-white/55">{t.role}</div>
-                </div>
-              </div>
-            </motion.div>
-          ))}
+                <h3 className="text-lg font-semibold text-white">{item.title}</h3>
+                <p className="mt-3 text-sm text-white/65 leading-relaxed">{item.copy}</p>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
     </section>

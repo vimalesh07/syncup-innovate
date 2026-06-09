@@ -3,10 +3,10 @@ import { UserX, Clock, EyeOff, Search, ShieldOff, Palette } from "lucide-react";
 
 const problems = [
   { icon: UserX, title: "Finding Reliable Teammates", desc: "Trust is hard. Random teammates ghost, miss deadlines, or lack the skills they claimed." },
-  { icon: Clock, title: "Last-Minute Team Chaos", desc: "Days before submission, teams scramble. SyncUp pre-matches you with vetted innovators." },
+  { icon: Clock, title: "Last-Minute Team Chaos", desc: "Days before submission, teams scramble. SyncUp helps students discover roles and teammates earlier." },
   { icon: EyeOff, title: "Hidden Talent, Unnoticed", desc: "Brilliant designers, ML engineers, and researchers stay invisible to the people who need them." },
   { icon: Search, title: "Competitions Scattered", desc: "SIH, hackathons, symposiums, startup contests — all in different places, easy to miss." },
-  { icon: ShieldOff, title: "No Trusted Collaboration", desc: "No shared workspace, no reliability score, no signal of who actually delivers." },
+  { icon: ShieldOff, title: "No Trusted Collaboration", desc: "Without clear profiles and project context, students struggle to know who fits the team." },
   { icon: Palette, title: "Non-Tech Contributors Ignored", desc: "Designers, writers, PMs, researchers — equally vital, equally overlooked. We fix that." },
 ];
 

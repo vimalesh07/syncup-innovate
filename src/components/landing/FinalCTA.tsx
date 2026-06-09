@@ -29,7 +29,7 @@ export function FinalCTA() {
           </h2>
 
           <p className="mt-7 mx-auto max-w-xl text-white/65 text-base sm:text-lg">
-            Join 12,000+ students already building the future. Your team is one click away.
+            Create your profile, discover builders, send team requests, and collaborate in one place.
           </p>
 
           <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">

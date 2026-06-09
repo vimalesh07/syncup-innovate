@@ -1,21 +1,20 @@
 import { Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { ArrowRight, Compass, Users, Trophy, Rocket, GitBranch } from "lucide-react";
+import { ArrowRight, Users, Trophy, Rocket, GitBranch } from "lucide-react";
 import { FloatingParticles, GradientBlobs } from "./Background";
-import { AnimatedCounter } from "./AnimatedCounter";
 
 const stats = [
-  { value: 12000, suffix: "+", label: "Students" },
-  { value: 3500, suffix: "+", label: "Teams Formed" },
-  { value: 850, suffix: "+", label: "Competitions" },
-  { value: 27000, suffix: "+", label: "Collaborations" },
+  { title: "Built for Students", label: "Profiles for skills, goals, and portfolio proof" },
+  { title: "Team Discovery", label: "Find builders by role, interest, and availability" },
+  { title: "Competition Ready", label: "Organize hackathon and project team formation" },
+  { title: "Collaboration First", label: "Requests, messages, and teams in one place" },
 ];
 
 const floatCards = [
-  { icon: Users, title: "Smart Team Match", sub: "94% compatibility", top: "12%", left: "4%", delay: 0.2, color: "from-blue-500 to-cyan-400" },
-  { icon: Trophy, title: "Smart India Hackathon", sub: "Deadline: 3 days", top: "20%", right: "4%", delay: 0.4, color: "from-purple-500 to-pink-400" },
-  { icon: GitBranch, title: "AI Healthcare Project", sub: "5/6 members joined", bottom: "20%", left: "6%", delay: 0.6, color: "from-cyan-400 to-blue-500" },
-  { icon: Rocket, title: "Launching Today", sub: "Pitch in 2h", bottom: "14%", right: "6%", delay: 0.8, color: "from-fuchsia-500 to-purple-500" },
+  { icon: Users, title: "Builder Profiles", sub: "Skills, roles, portfolio links", top: "12%", left: "4%", delay: 0.2, color: "from-blue-500 to-cyan-400" },
+  { icon: Trophy, title: "Competition Planning", sub: "Prepare teams before deadlines", top: "20%", right: "4%", delay: 0.4, color: "from-purple-500 to-pink-400" },
+  { icon: GitBranch, title: "Project Discovery", sub: "Explore ideas by domain", bottom: "20%", left: "6%", delay: 0.6, color: "from-cyan-400 to-blue-500" },
+  { icon: Rocket, title: "Team Requests", sub: "Invite the right collaborators", bottom: "14%", right: "6%", delay: 0.8, color: "from-fuchsia-500 to-purple-500" },
 ];
 
 export function Hero() {
@@ -49,8 +48,8 @@ export function Hero() {
                   </div>
                 </div>
                 <div className="mt-3 flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse-ring" />
-                  <span className="text-[11px] text-white/60">Live</span>
+                  <span className="h-2 w-2 rounded-full bg-cyan-300" />
+                  <span className="text-[11px] text-white/60">Feature preview</span>
                 </div>
               </div>
             </motion.div>
@@ -85,8 +84,8 @@ export function Hero() {
           transition={{ duration: 0.8, delay: 0.25 }}
           className="mt-7 mx-auto max-w-2xl text-base sm:text-lg text-white/65 leading-relaxed"
         >
-          SyncUp connects students, developers, designers, researchers, and innovators to form
-          powerful competition teams and collaborate on groundbreaking ideas.
+          A student collaboration platform for finding teammates, joining competitions,
+          and building projects together.
         </motion.p>
 
         <motion.div
@@ -102,13 +101,6 @@ export function Hero() {
             Find a Team
             <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
           </Link>
-          <a
-            href="#features"
-            className="group inline-flex items-center gap-2 px-7 py-3.5 rounded-xl glass-strong text-white font-medium hover:bg-white/10 transition-all"
-          >
-            <Compass className="h-4 w-4" />
-            Explore Competitions
-          </a>
         </motion.div>
 
         {/* Stats */}
@@ -119,11 +111,9 @@ export function Hero() {
           className="mt-20 grid grid-cols-2 md:grid-cols-4 gap-4"
         >
           {stats.map((s) => (
-            <div key={s.label} className="glass rounded-2xl p-5">
-              <div className="text-3xl sm:text-4xl font-bold text-gradient">
-                <AnimatedCounter to={s.value} />{s.suffix}
-              </div>
-              <div className="mt-1 text-xs sm:text-sm text-white/60">{s.label}</div>
+            <div key={s.title} className="glass rounded-2xl p-5 text-left">
+              <div className="text-lg sm:text-xl font-bold text-gradient">{s.title}</div>
+              <div className="mt-2 text-xs sm:text-sm text-white/60 leading-relaxed">{s.label}</div>
             </div>
           ))}
         </motion.div>

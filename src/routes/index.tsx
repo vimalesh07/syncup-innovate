@@ -7,7 +7,6 @@ import { Features } from "@/components/landing/Features";
 import { TeamMatchDemo } from "@/components/landing/TeamMatchDemo";
 import { HowItWorks } from "@/components/landing/HowItWorks";
 import { Community } from "@/components/landing/Community";
-import { LiveStats } from "@/components/landing/LiveStats";
 import { Testimonials } from "@/components/landing/Testimonials";
 import { FinalCTA } from "@/components/landing/FinalCTA";
 import { Footer } from "@/components/landing/Footer";
@@ -27,7 +26,7 @@ export const Route = createFileRoute("/")({
       {
         property: "og:description",
         content:
-          "Discover competitions, match with vetted teammates, and collaborate in real-time. The operating system for student innovation.",
+          "Create your profile, discover builders, send team requests, and collaborate in one student-focused workspace.",
       },
     ],
   }),
@@ -59,7 +58,6 @@ function Landing() {
       <TeamMatchDemo />
       <HowItWorks />
       <Community />
-      <LiveStats />
       <Testimonials />
       <FinalCTA />
       <Footer />
