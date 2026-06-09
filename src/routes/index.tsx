@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { Navbar } from "@/components/landing/Navbar";
 import { Hero } from "@/components/landing/Hero";
 import { Problems } from "@/components/landing/Problems";
@@ -8,7 +8,6 @@ import { TeamMatchDemo } from "@/components/landing/TeamMatchDemo";
 import { HowItWorks } from "@/components/landing/HowItWorks";
 import { Community } from "@/components/landing/Community";
 import { Testimonials } from "@/components/landing/Testimonials";
-import { FinalCTA } from "@/components/landing/FinalCTA";
 import { Footer } from "@/components/landing/Footer";
 import { CursorGlow } from "@/components/landing/Background";
 import { supabase } from "@/integrations/supabase/client";
@@ -16,13 +15,13 @@ import { supabase } from "@/integrations/supabase/client";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "SyncUp — Build Your Dream Innovation Team" },
+      { title: "SyncUp — Your Student Innovation Launchpad" },
       {
         name: "description",
         content:
           "SyncUp connects students, developers, designers, and researchers to form trusted teams, discover hackathons, and ship breakthrough projects together.",
       },
-      { property: "og:title", content: "SyncUp — Build Your Dream Innovation Team" },
+      { property: "og:title", content: "SyncUp — Your Student Innovation Launchpad" },
       {
         property: "og:description",
         content:
@@ -35,6 +34,28 @@ export const Route = createFileRoute("/")({
 
 function Landing() {
   const navigate = useNavigate();
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    });
+    const timer = window.setTimeout(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      window.history.scrollRestoration = previousScrollRestoration;
+    }, 120);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      window.history.scrollRestoration = previousScrollRestoration;
+    };
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -59,7 +80,6 @@ function Landing() {
       <HowItWorks />
       <Community />
       <Testimonials />
-      <FinalCTA />
       <Footer />
     </main>
   );
